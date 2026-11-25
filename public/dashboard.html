@@ -71,8 +71,8 @@ async function render(note) {
   const me = await api("me").catch(() => ({}));
   if (!me.signedIn) return location.replace("/signin");
   listen(me.events);
-  document.getElementById("who").innerHTML = `<a href="#" id="out" class="icon" title="Sign out (${esc(me.login)})" aria-label="Sign out (${esc(me.login)})"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></a>`;
-  document.getElementById("out").onclick = (e) => { e.preventDefault(); api("logout", {}).then(() => location.reload()); };
+  document.getElementById("who").innerHTML = `<details class="acct-menu"><summary aria-label="Account: ${esc(me.login)}"><span aria-hidden="true">${esc(me.login.slice(0, 1).toUpperCase())}</span><img src="https://github.com/${encodeURIComponent(me.login)}.png?size=64" alt="" onerror="this.remove()"></summary><div><span>Signed in as ${esc(me.login)}</span><button type="button" id="out">Sign out</button></div></details>`;
+  document.getElementById("out").onclick = () => api("logout", {}).then(() => location.reload());
   let list;
   let latest;
   try { ({ instances: list, latest } = await api("instances")); } catch (e) { $app.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
@@ -166,6 +166,9 @@ async function render(note) {
 render();
 // Server push: the stream sends a revision that moves whenever this user's sites or connections change
 // (Claude connected, a site updated, a domain went live…). Re-render on a change, unless they're typing in a field.
+// The account menu closes on a tap outside it or Escape.
+addEventListener("click", (e) => document.querySelectorAll(".acct-menu[open]").forEach((d) => !d.contains(e.target) && d.removeAttribute("open")));
+addEventListener("keydown", (e) => e.key === "Escape" && document.querySelectorAll(".acct-menu[open]").forEach((d) => d.removeAttribute("open")));
 let rev, events;
 function listen(url) {
   if (events || !url) return;
