@@ -50,7 +50,7 @@ async function render(note) {
     b.closest(".row").querySelectorAll("button").forEach((x) => (x.disabled = true));
     b.textContent = LABEL[a];
     try { const r = await api(`instances/${id}/${a}`, {}); render(a === "delete" ? `Deleted ${id}.` : a === "tag" ? `Added the tag to ${r.path}. Your host redeploys from that commit.` : `${id}: ${a} done.`); }
-    catch (e) { render(e.message); }
+    catch (e) { if (e.message === "Sign in with GitHub again") location.href = "/cloud/github/login?next=dashboard"; else render(e.message); }
   }));
 }
 render();
