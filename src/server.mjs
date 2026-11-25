@@ -242,13 +242,16 @@ async function addOrigin(inst, origin) {
 // ---- dashboard actions ----
 const INSTALL = `curl -fsSL https://raw.githubusercontent.com/vibhasjain/agent-keyboard/${REF}/server/sprite-install.sh -o ~/sprite-install.sh && AK_REF=${REF} bash ~/sprite-install.sh`;
 // The version a Sprite runs = the last commits touching server/ and widget/ at REF (site/ changes don't count).
+let latestCache = { at: 0, v: null };
 async function latest() {
+  if (Date.now() - latestCache.at < 600e3) return latestCache.v;
   const shas = await Promise.all(["server", "widget"].map(async (path) => {
     const r = await fetch(`https://api.github.com/repos/vibhasjain/agent-keyboard/commits?sha=${REF}&path=${path}&per_page=1`, { headers: { "User-Agent": "agent-keyboard-cloud" } });
     if (!r.ok) throw new Error(`github ${r.status}`);
     return (await r.json())[0].sha.slice(0, 7);
   }));
-  return shas.join("+");
+  latestCache = { at: Date.now(), v: shas.join("+") };
+  return latestCache.v;
 }
 // Auto-update (on unless the owner turned it off): hourly, each Sprite behind the latest version reinstalls,
 // skipping any that is running a job (a Claude CLI turn) so nothing is cut off; it tries again next hour.
@@ -445,7 +448,7 @@ const routes = {
 
   "GET /cloud/instances": async (q, req, res, s) => {
     if (!s) return send(res, 401, { error: "Sign in" });
-    send(res, 200, { instances: await Promise.all(load().filter((i) => i.email === s.email).map(status)) });
+    send(res, 200, { instances: await Promise.all(load().filter((i) => i.email === s.email).map(status)), latest: await latest().catch(() => null) });
   },
 };
 

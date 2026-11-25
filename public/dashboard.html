@@ -10,7 +10,7 @@
 <body>
 <div class="wrap">
   <div class="top"><a class="brand" href="https://agentkeyboard.com"><img src="https://agentkeyboard.com/typewriter-mark.png" alt=""><b>Agent Keyboard</b></a><span id="who"></span></div>
-  <h1>Your instances</h1>
+  <h1>Your sites</h1>
   <div id="app" aria-live="polite"><p>Loading…</p></div>
 </div>
 <script>
@@ -28,7 +28,7 @@ let timer;
 // Cloudflare Pages hosting (spec #13): where the site is served, its previews and sandboxes.
 function hosting(i, me) {
   const p = i.pages ?? {};
-  if (p.state === "live") return `<div class="meta">Hosted on Cloudflare Pages${p.staging ? ` · live <a href="${esc(p.live)}" target="_blank" rel="noopener">${esc(p.live.replace("https://", ""))}</a>` : ""} · sandboxes on. Each push deploys in about a minute.</div>${domain(i)}`;
+  if (p.state === "live") return `${p.staging ? `<div class="meta">Live at <a href="${esc(p.live)}" target="_blank" rel="noopener">${esc(p.live.replace("https://", ""))}</a></div>` : ""}${domain(i)}`;
   if (p.state === "setting up") return `<div class="meta">Cloudflare Pages: ${esc(p.detail || "setting up")}…</div>`;
   const err = p.state === "error" ? `<p class="err">${esc(p.error)}</p>${p.permsUrl ? `<div class="row"><a class="btn ghost" href="${esc(p.permsUrl)}" target="_blank" rel="noopener">Review permissions on GitHub</a></div>` : ""}` : "";
   return me.cloudflare ? `${err}<div class="meta">Not on Cloudflare Pages yet.</div>` : "";
@@ -70,19 +70,25 @@ async function render(note) {
   document.getElementById("who").innerHTML = `${esc(me.login)} · <a href="#" id="out">Sign out</a>`;
   document.getElementById("out").onclick = (e) => { e.preventDefault(); api("logout", {}).then(() => location.reload()); };
   let list;
-  try { list = (await api("instances")).instances; } catch (e) { $app.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  let latest;
+  try { ({ instances: list, latest } = await api("instances")); } catch (e) { $app.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
   if (!list.length) return location.replace("/start");
-  $app.innerHTML = `<p style="min-height:1.6em">${esc(note ?? "")}</p>` + (me.cloudflare ? "" : cfForm(me)) + list.map((i) => `
+  // The card's title is the site's address: the custom domain once active, else Pages (or the staging preview), else the repo's own domain.
+  const host = (i) => (i.pages?.state === "live" ? (i.pages.staging ?? (i.customDomain?.status === "active" ? i.customDomain.host : i.pages.live)) : i.starter ? i.url : i.domain).replace("https://", "");
+  $app.innerHTML = (note ? `<p class="note">${esc(note)}</p>` : "") + (me.cloudflare ? "" : cfForm(me)) + list.map((i) => {
+    const behind = latest ? i.version !== latest : null, bad = !["running", "warm", "cold"].includes(i.status);
+    return `
     <div class="card inst" data-id="${esc(i.id)}">
-      <div class="head"><h2><span class="dot ${["running", "warm", "cold"].includes(i.status) ? "on" : ""}"></span>${esc(i.siteId)}</h2><label class="auto" title="Installs each new Agent Keyboard release when no job is running">Auto-update<button class="switch" role="switch" aria-checked="${i.autoUpdate !== false}" data-a="autoupdate" aria-label="Auto-update"></button></label></div>
-      <div class="meta">Sprite <b>${esc(i.id)}</b> · ${esc(i.status)} · version ${esc(i.version ?? i.ref)} · since ${esc(i.createdAt.slice(0, 10))}</div>
-      <div class="meta">Repo <a href="https://github.com/${esc(i.repo)}" target="_blank" rel="noopener">${esc(i.repo)}</a> · site <a href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar">${esc(i.pages?.state === "live" ? (i.pages.staging ?? (i.customDomain?.status === "active" ? i.customDomain.host : i.pages.live)).replace("https://", "") : i.starter ? i.url : i.domain)}</a>${i.pages?.state === "live" && !i.pages.staging && i.customDomain?.status === "active" ? ` ${unlink(i.customDomain.host)}` : ""}</div>
+      <div class="head"><h2>${bad ? `<span class="dot bad" title="${esc(i.status)}"></span>` : ""}<a href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar">${esc(host(i))}</a>${i.pages?.state === "live" && !i.pages.staging && i.customDomain?.status === "active" ? ` ${unlink(i.customDomain.host)}` : ""}</h2><label class="auto" title="Installs each new Agent Keyboard release when no job is running">Auto-update<button class="switch" role="switch" aria-checked="${i.autoUpdate !== false}" data-a="autoupdate" aria-label="Auto-update"></button></label></div>
+      <div class="meta"><a href="https://github.com/${esc(i.repo)}" target="_blank" rel="noopener">${esc(i.repo)}</a>${i.pages?.state === "live" ? " · Cloudflare Pages · sandboxes on" : ""}${behind === null ? "" : behind ? " · Update available" : " · Up to date"}</div>
       ${i.staging ? `<div class="meta">Staged: the bar commits to <b>ak-staging</b> (this preview); tell it "deploy to live" to ship</div>` : ""}
-      ${i.starter ? "" : i.tagPath ? `<div class="meta">Bar added to <b>${esc(i.tagPath)}</b></div>` : `<pre>${esc(i.tag)}</pre>`}
+      ${i.starter ? "" : i.tagPath ? "" : `<pre>${esc(i.tag)}</pre>`}
       ${hosting(i, me)}
       ${i.status === "reconnect Fly" ? `<p class="err">Our access to your Fly account expired or was revoked. Delete and set up again to reconnect.</p>` : ""}
-      <div class="row">${!me.cloudflare || i.pages?.state === "live" || i.pages?.state === "setting up" ? "" : `<button class="btn" data-a="pages">${i.pages?.state === "error" ? "Retry Cloudflare Pages" : "Host on Cloudflare Pages"}</button>`}${i.starter || i.tagPath ? "" : `<button class="btn ghost" data-a="tag" title="Commits the tag to your repo's index.html">Add the tag for me</button>`}<button class="btn ghost" data-a="restart">Restart</button><button class="btn ghost" data-a="update">Update</button><button class="btn ghost" data-a="delete">Delete</button></div>
-    </div>`).join("") + `<div class="row"><a class="btn ghost" href="/start">Add another site</a>${claudeBtn(me)}</div>${me.cloudflare ? `<p class="small">Cloudflare: connected (${esc(me.cloudflare)}) · <a href="#" id="cfre">Use a different token</a></p>` : ""}<div id="cfslot"></div>`;
+      <div class="row"><a class="btn" href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener">Open site</a>${!me.cloudflare || i.pages?.state === "live" || i.pages?.state === "setting up" ? "" : `<button class="btn ghost" data-a="pages">${i.pages?.state === "error" ? "Retry Cloudflare Pages" : "Host on Cloudflare Pages"}</button>`}${i.starter || i.tagPath ? "" : `<button class="btn ghost" data-a="tag" title="Commits the tag to your repo's index.html">Add the tag for me</button>`}${behind !== false ? `<button class="btn ghost" data-a="update">Update</button>` : ""}<button class="btn ghost" data-a="restart">Restart</button><button class="danger" data-a="delete">Delete</button></div>
+      <details class="more"><summary>Details</summary><div class="meta">Sprite <b>${esc(i.id)}</b> · ${esc(i.status)} · version ${esc(i.version ?? i.ref)} · since ${esc(i.createdAt.slice(0, 10))}${i.tagPath ? ` · bar in ${esc(i.tagPath)}` : ""}</div></details>
+    </div>`;
+  }).join("") + `<div class="row"><a class="btn ghost" href="/start">Add another site</a>${claudeBtn(me)}</div>${me.cloudflare ? `<p class="small acct">Cloudflare: connected (${esc(me.cloudflare)}) · <a href="#" id="cfre">Use a different token</a></p>` : ""}<div id="cfslot"></div>`;
   clearTimeout(timer);
   if (list.some((i) => i.pages?.state === "setting up")) timer = setTimeout(() => render(note), 3000);
   else if (list.some((i) => i.customDomain?.status === "pending")) timer = setTimeout(() => render(note), 30e3);
