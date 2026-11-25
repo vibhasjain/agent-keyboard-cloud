@@ -33,13 +33,16 @@ function hosting(i, me) {
   const err = p.state === "error" ? `<p class="err">${esc(p.error)}</p>${p.permsUrl ? `<div class="row"><a class="btn ghost" href="${esc(p.permsUrl)}" target="_blank" rel="noopener">Review permissions on GitHub</a></div>` : ""}` : "";
   return me.cloudflare ? `${err}<div class="meta">Not on Cloudflare Pages yet.</div>` : "";
 }
+// The disconnect icon that removes a custom domain.
+const unlink = (host) => `<button class="icon" data-a="domain-remove" title="Disconnect ${esc(host)}" aria-label="Disconnect ${esc(host)}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18.84 12.25 1.72-1.71a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="m5.17 11.75-1.71 1.71a5 5 0 0 0 7.07 7.07l1.71-1.71"/><path d="M8 2v3M2 8h3M16 19v3M19 16h3"/></svg></button>`;
 // Custom domain (spec #13 M4): add one, then what to do until Pages says it's active.
 function domain(i) {
   const d = i.customDomain, sub = i.pages.sub, link = (h) => `<a href="https://${esc(h)}" target="_blank" rel="noopener">${esc(h)}</a>`;
   if (!d) return `<form class="dom"><label for="dom-${esc(i.id)}">Your domain (optional)</label><div class="row"><input id="dom-${esc(i.id)}" placeholder="www.example.com" autocomplete="off" autocapitalize="off" spellcheck="false" required><button class="btn ghost">Add domain</button></div></form>`;
-  const rm = `<button class="icon" data-a="domain-remove" title="Disconnect ${esc(d.host)}" aria-label="Disconnect ${esc(d.host)}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18.84 12.25 1.72-1.71a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="m5.17 11.75-1.71 1.71a5 5 0 0 0 7.07 7.07l1.71-1.71"/><path d="M8 2v3M2 8h3M16 19v3M19 16h3"/></svg></button>`;
+  const rm = unlink(d.host);
   const err = d.error ? `<p class="err">${esc(d.error)}</p>` : "";
-  if (d.status === "active") return `<div class="meta">Live at ${link(d.host)} ✓ ${rm}</div>${err}`;
+  // Active: the "site" link above shows it, with this icon; staged sites link the preview there instead.
+  if (d.status === "active") return `${i.pages.staging ? `<div class="meta">Live at ${link(d.host)} ✓ ${rm}</div>` : ""}${err}`;
   let how;
   if (d.zone?.status === "active") how = `We pointed ${esc(d.host)} at your Pages site in your Cloudflare DNS. Cloudflare is issuing its certificate, usually a few minutes.`;
   else if (d.zone) how = `${esc(d.host)} is in your Cloudflare account but not active yet. At your registrar, set its nameservers to <b>${d.zone.ns.map(esc).join("</b> and <b>")}</b>. That can take a few hours to take effect.`;
@@ -69,7 +72,7 @@ async function render(note) {
     <div class="card inst" data-id="${esc(i.id)}">
       <h2><span class="dot ${["running", "warm", "cold"].includes(i.status) ? "on" : ""}"></span>${esc(i.siteId)}</h2>
       <div class="meta">Sprite <b>${esc(i.id)}</b> · ${esc(i.status)} · version ${esc(i.version ?? i.ref)} · since ${esc(i.createdAt.slice(0, 10))}</div>
-      <div class="meta">Repo <a href="https://github.com/${esc(i.repo)}" target="_blank" rel="noopener">${esc(i.repo)}</a> · site <a href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar">${esc(i.pages?.state === "live" ? (i.pages.staging ?? (i.customDomain?.status === "active" ? i.customDomain.host : i.pages.live)).replace("https://", "") : i.starter ? i.url : i.domain)}</a></div>
+      <div class="meta">Repo <a href="https://github.com/${esc(i.repo)}" target="_blank" rel="noopener">${esc(i.repo)}</a> · site <a href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar">${esc(i.pages?.state === "live" ? (i.pages.staging ?? (i.customDomain?.status === "active" ? i.customDomain.host : i.pages.live)).replace("https://", "") : i.starter ? i.url : i.domain)}</a>${i.pages?.state === "live" && !i.pages.staging && i.customDomain?.status === "active" ? ` ${unlink(i.customDomain.host)}` : ""}</div>
       ${i.staging ? `<div class="meta">Staged: the bar commits to <b>ak-staging</b> (this preview); tell it "deploy to live" to ship</div>` : ""}
       ${i.starter ? "" : i.tagPath ? `<div class="meta">Bar added to <b>${esc(i.tagPath)}</b></div>` : `<pre>${esc(i.tag)}</pre>`}
       ${hosting(i, me)}
