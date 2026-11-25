@@ -47,6 +47,12 @@ export async function isBlank(token, fullName) {
 export const putFile = (token, fullName, path, content, message) =>
   gh(token, "PUT", `/repos/${fullName}/contents/${path}`, { message, content: Buffer.from(content).toString("base64") });
 
+/** Create `branch` from the default branch (kept if it already exists). */
+export async function ensureBranch(token, fullName, from, branch) {
+  const { object } = await gh(token, "GET", `/repos/${fullName}/git/ref/heads/${from}`);
+  await gh(token, "POST", `/repos/${fullName}/git/refs`, { ref: `refs/heads/${branch}`, sha: object.sha }).catch((e) => (e.status === 422 ? null : Promise.reject(e)));
+}
+
 /** Give the Sprite push access with its own public key (the private half never leaves it). */
 export async function addDeployKey(token, fullName, title, key) {
   try {
@@ -58,19 +64,23 @@ export async function addDeployKey(token, fullName, title, key) {
 }
 
 /** Commit the bar's script tag into the site's index.html, before </body>. Returns the path. */
-export async function addTag(token, fullName, tag) {
+export async function addTag(token, fullName, tag, branch) {
+  const ref = branch ? `?ref=${encodeURIComponent(branch)}` : "";
   for (const path of ["index.html", "public/index.html", "site/index.html", "docs/index.html", "src/index.html"]) {
-    const f = await gh(token, "GET", `/repos/${fullName}/contents/${path}`).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
+    const f = await gh(token, "GET", `/repos/${fullName}/contents/${path}${ref}`).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
     if (!f?.content) continue;
     const html = Buffer.from(f.content, "base64").toString("utf8");
     if (html.includes(tag.match(/src="([^"]+)"/)[1])) return path; // already there
+    // Another Agent Keyboard bar (an older instance, or self-hosted): swap it, so the page has one bar.
+    const old = html.match(/<script\b(?=[^>]*\/widget\.js["'])(?=[^>]*\bdata-site=)[^>]*>\s*<\/script>/i);
     const i = html.toLowerCase().lastIndexOf("</body>");
-    if (i < 0) continue;
-    const next = `${html.slice(0, i)}${tag}\n${html.slice(i)}`;
+    if (!old && i < 0) continue;
+    const next = old ? html.replace(old[0], tag) : `${html.slice(0, i)}${tag}\n${html.slice(i)}`;
     await gh(token, "PUT", `/repos/${fullName}/contents/${path}`, {
       message: "Add the Agent Keyboard bar",
       content: Buffer.from(next).toString("base64"),
       sha: f.sha,
+      ...(branch ? { branch } : {}),
     });
     return path;
   }

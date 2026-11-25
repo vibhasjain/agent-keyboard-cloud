@@ -124,10 +124,10 @@ async function runProvision(flow, code) {
       (d) => (flow.detail = d),
     );
     // A brought site gets the tag committed to its index.html; if there isn't one, the page shows it to paste.
-    const tagPath = r.starter ? null : await addTag(user.token, r.repo, r.tag).catch(() => null);
-    upsert({ id: r.sprite, tagPath, email: flow.email, login: flow.login, siteId: r.siteId, repo: r.repo, domain: r.domain, url: r.url, connection: r.connection, starter: r.starter, tag: r.tag, ref: REF, createdAt: new Date().toISOString(), assertion: seal(flow.assertion) });
+    const tagPath = r.starter || r.staging ? r.tagPath : await addTag(user.token, r.repo, r.tag).catch(() => null);
+    upsert({ id: r.sprite, tagPath, email: flow.email, login: flow.login, siteId: r.siteId, repo: r.repo, domain: r.domain, url: r.url, connection: r.connection, starter: r.starter, staging: r.staging, tag: r.tag, ref: REF, createdAt: new Date().toISOString(), assertion: seal(flow.assertion) });
     flow.assertion = null;
-    step(flow, "done", { result: { url: r.url, tag: r.tag, starter: r.starter, repo: r.repo, tagPath } });
+    step(flow, "done", { result: { url: r.url, tag: r.tag, starter: r.starter, staging: r.staging, repo: r.repo, tagPath } });
   } catch (e) {
     // Claude's login is single-use: drop the old link (the page waits) and start a fresh one.
     if (flow.step === "connector") flow.loginUrl = null;
@@ -246,8 +246,8 @@ const routes = {
     if (b.repo) {
       if (!(await userRepos(u.token, u.installations)).some((r) => r.full_name === b.repo)) return send(res, 400, { error: "Pick a repo you gave Agent Keyboard access to" });
       repo = b.repo;
-      domain = String(b.domain ?? "").trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "").toLowerCase();
-      if (!/^[a-z0-9.-]+\.[a-z]{2,}(:\d+)?$/.test(domain)) return send(res, 400, { error: "Enter your site's domain, like example.com" });
+      domain = String(b.domain ?? "").trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "").toLowerCase() || null; // none: staged on the Sprite
+      if (domain && !/^[a-z0-9.-]+\.[a-z]{2,}(:\d+)?$/.test(domain)) return send(res, 400, { error: "Enter your site's domain, like example.com, or leave it blank" });
     } else {
       name = slug(String(b.name ?? "my-site"));
     }
@@ -302,7 +302,7 @@ createServer(async (req, res) => {
       if (m[2] === "tag") {
         const gu = ghUser(s.login);
         if (!gu || inst.starter) return send(res, gu ? 400 : 401, { error: gu ? "Starter sites already have the bar" : "Sign in with GitHub again" });
-        const path = await addTag(gu.token, inst.repo, inst.tag);
+        const path = await addTag(gu.token, inst.repo, inst.tag, inst.staging ? "ak-staging" : undefined);
         upsert({ ...inst, tagPath: path });
         return send(res, 200, { ok: true, path });
       }

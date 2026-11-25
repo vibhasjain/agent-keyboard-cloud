@@ -4,7 +4,7 @@
 
 import { randomBytes } from "node:crypto";
 import { mint, sprites } from "./fly.mjs";
-import { addDeployKey, createRepo, getRepo, isBlank, putFile } from "./github.mjs";
+import { addDeployKey, addTag, createRepo, ensureBranch, getRepo, isBlank, putFile } from "./github.mjs";
 
 const INSTALL_URL = "https://raw.githubusercontent.com/vibhasjain/agent-keyboard/{ref}/server/sprite-install.sh";
 const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
@@ -24,6 +24,24 @@ export async function ensureSprite(api, name) {
 
 export function scriptTag(spriteUrl, siteId) {
   return `<script src="${spriteUrl}/widget.js" data-site="${siteId}" defer></script>`;
+}
+
+const STAGING = "ak-staging";
+
+/** The Sprite agent's user memory for a staged site: where changes go and how to ship them. */
+function stagingMemory(url, staging, live) {
+  return `# Staging and live
+
+This site is staged. Your pushes go to the \`${staging}\` branch, which this Sprite serves as a preview at ${url}. Nothing you push there reaches the live site.
+
+The live site deploys from \`${live}\` (wherever the owner's host builds it). When the owner asks to deploy, publish, ship or "go live":
+1. Make sure everything is committed and pushed to \`${staging}\`.
+2. \`git fetch origin ${live}\` and merge it into \`${staging}\` if it moved (resolve conflicts, push \`${staging}\`).
+3. \`git push origin ${staging}:${live}\`. Their host redeploys from that.
+4. Reply with what shipped. If you don't know the live URL, ask for it once and remember it.
+
+Never push to \`${live}\` for any other reason.
+`;
 }
 
 export function starterIndex(name, tag) {
@@ -92,9 +110,10 @@ export async function provision(opts, progress = () => {}) {
   progress(`sprite: creating ${name}`);
   const url = await ensureSprite(api, name);
   // A starter site lives on the Sprite; a brought site is wherever its homepage is.
-  const homepage = repo?.homepage && (/^https?:\/\//.test(repo.homepage) ? repo.homepage : `https://${repo.homepage}`);
-  const domain = starter ? new URL(url).host : opts.domain ?? (homepage && new URL(homepage).host);
-  if (!domain) throw new Error(`no domain for ${repo.full_name}: pass the site's host (the repo has no homepage)`);
+  // A brought site with no domain is staged: the Sprite serves the STAGING branch as a preview and the
+  // bar pushes there; "deploy to live" (its ~/.claude/CLAUDE.md) pushes it to the default branch.
+  const staging = !starter && !opts.domain;
+  const domain = starter || staging ? new URL(url).host : opts.domain;
 
   if (blank) {
     progress("github: adding a starter page");
@@ -108,7 +127,15 @@ export async function provision(opts, progress = () => {}) {
     });
   }
 
-  const site = { id: siteId, repo: repo.ssh_url, branch: repo.default_branch || "main", domain, ...(starter ? { serve: true } : {}) };
+  const live = repo.default_branch || "main";
+  let tagPath = null;
+  if (staging) {
+    progress(`github: creating the ${STAGING} branch`);
+    await ensureBranch(githubToken, repo.full_name, live, STAGING);
+    tagPath = await addTag(githubToken, repo.full_name, scriptTag(url, siteId), STAGING).catch(() => null);
+  }
+  const site = { id: siteId, repo: repo.ssh_url, branch: staging ? STAGING : live, domain, ...(starter || staging ? { serve: true } : {}) };
+  const memory = staging ? stagingMemory(url, STAGING, live) : "";
   const env = {
     PORT: "8080",
     AGENT_DATA_DIR: "/data",
@@ -132,6 +159,7 @@ export async function provision(opts, progress = () => {}) {
     name,
     [
       `umask 077; printf %s ${shq(Buffer.from(envFile).toString("base64"))} | base64 -d > ~/ak.env`,
+      ...(memory ? [`mkdir -p ~/.claude && printf %s ${shq(Buffer.from(memory).toString("base64"))} | base64 -d > ~/.claude/CLAUDE.md`] : []),
       `curl -fsSL ${shq(INSTALL_URL.replace("{ref}", ref))} -o ~/sprite-install.sh`,
       `AK_REF=${shq(ref)} bash ~/sprite-install.sh`,
     ].join(" && "),
@@ -149,7 +177,7 @@ export async function provision(opts, progress = () => {}) {
   progress("bar: sign-in account");
   await ensureBarUser(supabase, email);
 
-  return { sprite: name, url, siteId, repo: repo.full_name, domain, connection: conn.id, tag: scriptTag(url, siteId), starter };
+  return { sprite: name, url, siteId, repo: repo.full_name, domain, connection: conn.id, tag: scriptTag(url, siteId), starter, staging, tagPath };
 }
 
 /** The bar signs in against our Supabase: invite the email unless it already has an account. */
