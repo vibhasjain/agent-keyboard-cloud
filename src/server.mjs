@@ -198,16 +198,16 @@ async function setupPages(id, ghToken, c) {
     const sites = JSON.parse(sitesJson);
     sites[0].sandbox = { preview: `https://{branch}.${p.subdomain}` };
     const extra = [...new Set([...had.split(",").filter(Boolean), `https://${p.subdomain}`, `https://ak-staging.${p.subdomain}`])].join(",");
-    const lines = `SITES=${shq(JSON.stringify(sites))}\nEXTRA_ORIGINS=${shq(extra)}\n`;
-    const memory = pagesMemory({ sub: p.subdomain, live, staging: inst.staging });
+    const lines = `SITES=${shq(JSON.stringify(sites))}\nEXTRA_ORIGINS=${shq(extra)}\nCLOUDFLARE_API_TOKEN=${shq(token)}\nCLOUDFLARE_ACCOUNT_ID=${shq(c.accountId)}\n`;
+    const memory = pagesMemory({ sub: p.subdomain, live, staging: inst.staging, domain: inst.customDomain?.host });
     await api.exec(id, [
-      `grep -v -e '^SITES=' -e '^EXTRA_ORIGINS=' ~/ak.env > ~/ak.env.new`,
+      `grep -v -e '^SITES=' -e '^EXTRA_ORIGINS=' -e '^CLOUDFLARE_API_TOKEN=' -e '^CLOUDFLARE_ACCOUNT_ID=' ~/ak.env > ~/ak.env.new`,
       `printf %s ${shq(Buffer.from(lines).toString("base64"))} | base64 -d >> ~/ak.env.new`,
       `chmod 600 ~/ak.env.new && mv ~/ak.env.new ~/ak.env`,
       `mkdir -p ~/.claude && printf %s ${shq(Buffer.from(memory).toString("base64"))} | base64 -d > ~/.claude/CLAUDE.md`,
       `sprite-env services restart ak`,
     ].join(" && "), { timeoutMs: 120e3 });
-    set({ state: "live", detail: "", live: `https://${p.subdomain}`, staging: inst.staging ? `https://ak-staging.${p.subdomain}` : null });
+    set({ state: "live", detail: "", branch: live, live: `https://${p.subdomain}`, staging: inst.staging ? `https://ak-staging.${p.subdomain}` : null });
   } catch (e) {
     console.error("pages", id, e.message);
     const perms = /Resource not accessible by integration/.test(e.message);
@@ -239,17 +239,20 @@ async function checkDomain(id, c) {
   const cur = load().find((x) => x.id === id);
   if (cur?.customDomain?.host === d.host) upsert({ ...cur, customDomain: next });
 }
-/** Let the bar on `origin` call the Sprite (CORS): add it to the Sprite's EXTRA_ORIGINS. */
-async function addOrigin(inst, origin) {
+/** After a custom domain change: let the bar on `origin` call the Sprite (CORS, EXTRA_ORIGINS), and
+ *  rewrite the agent's memory so it knows the site's address and has the Cloudflare token. */
+async function syncDomain(id, c, origin) {
+  const inst = load().find((x) => x.id === id);
   const api = sprites(await mint(open(inst.assertion)));
-  const { out } = await api.exec(inst.id, `. ~/ak.env; printf '%s' "$EXTRA_ORIGINS"`, { timeoutMs: 60e3 });
+  const { out } = await api.exec(id, `. ~/ak.env; printf '%s' "$EXTRA_ORIGINS"`, { timeoutMs: 60e3 });
   const had = out.trim().split(",").filter(Boolean);
-  if (had.includes(origin)) return;
-  const line = `EXTRA_ORIGINS=${shq([...had, origin].join(","))}\n`;
-  await api.exec(inst.id, [
-    `grep -v '^EXTRA_ORIGINS=' ~/ak.env > ~/ak.env.new`,
-    `printf %s ${shq(Buffer.from(line).toString("base64"))} | base64 -d >> ~/ak.env.new`,
+  const lines = `EXTRA_ORIGINS=${shq([...new Set([...had, ...(origin ? [origin] : [])])].join(","))}\nCLOUDFLARE_API_TOKEN=${shq(open(c.token))}\nCLOUDFLARE_ACCOUNT_ID=${shq(c.accountId)}\n`;
+  const memory = pagesMemory({ sub: inst.pages.sub, live: inst.pages.branch ?? "main", staging: inst.staging, domain: inst.customDomain?.host });
+  await api.exec(id, [
+    `grep -v -e '^EXTRA_ORIGINS=' -e '^CLOUDFLARE_API_TOKEN=' -e '^CLOUDFLARE_ACCOUNT_ID=' ~/ak.env > ~/ak.env.new`,
+    `printf %s ${shq(Buffer.from(lines).toString("base64"))} | base64 -d >> ~/ak.env.new`,
     `chmod 600 ~/ak.env.new && mv ~/ak.env.new ~/ak.env`,
+    `mkdir -p ~/.claude && printf %s ${shq(Buffer.from(memory).toString("base64"))} | base64 -d > ~/.claude/CLAUDE.md`,
     `sprite-env services restart ak`,
   ].join(" && "), { timeoutMs: 120e3 });
 }
@@ -524,13 +527,14 @@ async function dispatch(req, res, u, s, b) {
         if (m[2] === "domain-remove") {
           if (inst.customDomain) await removePagesDomain(token, c.accountId, inst.pages.project, inst.customDomain.host);
           upsert({ ...inst, customDomain: null });
+          await syncDomain(inst.id, c);
           return send(res, 200, { ok: true });
         }
         const host = String(b?.host ?? "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/[/:].*$/, "").replace(/\.$/, "");
         if (!HOST.test(host) || /\.(pages\.dev|sprites\.app|workers\.dev)$/.test(host)) return send(res, 400, { error: "Type a domain like www.example.com" });
         await addPagesDomain(token, c.accountId, inst.pages.project, host);
         upsert({ ...inst, customDomain: { host, status: "pending" } });
-        await addOrigin(inst, `https://${host}`);
+        await syncDomain(inst.id, c, `https://${host}`);
         await checkDomain(inst.id, c);
         return send(res, 200, { ok: true });
       }

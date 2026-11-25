@@ -83,8 +83,10 @@ jobs:
 `;
 
 /** The Sprite agent's memory once the site is on Pages (replaces the Sprite-preview staging memory). */
-export function pagesMemory({ sub, live, staging }) {
-  const hosting = `Every push deploys to Cloudflare Pages through the GitHub Actions workflow \`.github/workflows/agent-keyboard-pages.yml\` (about a minute after the push): \`${live}\` → https://${sub}, any other branch → https://<branch>.${sub} (lowercase, \`/\` → \`-\`). Never remove that workflow. The site must build to static files (Pages Functions in \`functions/\` are fine); a database has to be hosted (e.g. Supabase), not on this machine.`;
+export function pagesMemory({ sub, live, staging, domain }) {
+  const hosting = `Every push deploys to Cloudflare Pages through the GitHub Actions workflow \`.github/workflows/agent-keyboard-pages.yml\` (about a minute after the push): \`${live}\` → https://${sub}${domain ? ` and the custom domain https://${domain} (the site's real address: use it in links, metadata and replies)` : ""}, any other branch → https://<branch>.${sub} (lowercase, \`/\` → \`-\`). Never remove that workflow. The site must build to static files (Pages Functions in \`functions/\` are fine); a database has to be hosted (e.g. Supabase), not on this machine.
+
+\`CLOUDFLARE_API_TOKEN\` and \`CLOUDFLARE_ACCOUNT_ID\` in your environment are the owner's Cloudflare token and account (Pages: Edit, DNS: Edit, Zone: Read, Account Settings: Read). Use them for DNS records on their zones and for this Pages project, never ask the owner for another token for those, and never print the token. They can't change redirect rules, page rules or other zone settings: for those, tell the owner exactly what to set in the Cloudflare dashboard.`;
   if (!staging) return `# Hosting\n\n${hosting}\n`;
   return `# Staging and live
 
