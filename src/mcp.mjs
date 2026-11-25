@@ -23,7 +23,7 @@ async function read(req, limit = 1e6) {
   return Object.fromEntries(new URLSearchParams(s));
 }
 
-export function mcp({ BASE, DATA, seal, open, ghUser, fresh, dispatch, send, redirect, mac }) {
+export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, send, redirect, mac }) {
   const FILE = `${DATA}/oauth.json`;
   let db = null;
   try { if (existsSync(FILE)) db = JSON.parse(open(readFileSync(FILE, "utf8"))); } catch {}
@@ -108,6 +108,7 @@ export function mcp({ BASE, DATA, seal, open, ghUser, fresh, dispatch, send, red
         const c = codes.get(b.code);
         codes.delete(b.code);
         if (!c || c.exp < Date.now() || c.client !== b.client_id || c.redirect_uri !== b.redirect_uri || sha(String(b.code_verifier ?? "")) !== c.challenge) return (json(res, 400, { error: "invalid_grant" }), true);
+        notify(c.email); // pages showing "Connect to Claude" switch to "Manage in Claude"
         return (json(res, 200, issue({ login: c.login, email: c.email, client: c.client })), true);
       }
       if (b.grant_type === "refresh_token") {

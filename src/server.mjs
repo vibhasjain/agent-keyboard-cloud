@@ -32,8 +32,19 @@ const PAGES = new URL("../public/", import.meta.url);
 const DB = `${DATA}/instances.json`;
 const load = () => (existsSync(DB) ? JSON.parse(readFileSync(DB, "utf8")) : []);
 function save(list) {
+  const before = new Map(load().map((i) => [i.id, JSON.stringify(i)])), after = new Set(list.map((i) => i.id));
+  for (const i of list) if (before.get(i.id) !== JSON.stringify(i)) notify(i.email);
+  for (const i of load()) if (!after.has(i.id)) notify(i.email);
   writeFileSync(`${DB}.tmp`, JSON.stringify(list, null, 1), { mode: 0o600 });
   renameSync(`${DB}.tmp`, DB);
+}
+// ---- server push: /cloud/events streams a revision per user; it moves whenever their sites or connections change ----
+const streams = new Map(), revs = new Map(), BOOT = Date.now(); // email → Set(res) / revision
+function notify(email) {
+  if (!email) return;
+  const rev = (revs.get(email) ?? BOOT) + 1;
+  revs.set(email, rev);
+  for (const res of streams.get(email) ?? []) res.write(`data: ${rev}\n\n`);
 }
 const upsert = (inst) => save([...load().filter((i) => i.id !== inst.id), { ...inst, updatedAt: new Date().toISOString() }]);
 function seal(s) {
@@ -387,6 +398,16 @@ const routes = {
     send(res, 200, { ok: true });
   },
 
+  // Signed out: 204, which tells EventSource not to reconnect.
+  "GET /cloud/events": (q, req, res, s) => {
+    if (!s) return (res.writeHead(204), res.end());
+    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", "X-Accel-Buffering": "no" });
+    res.write(`retry: 3000\ndata: ${revs.get(s.email) ?? BOOT}\n\n`);
+    const set = streams.get(s.email) ?? new Set();
+    streams.set(s.email, set.add(res));
+    const ping = setInterval(() => res.write(": ping\n\n"), 20e3);
+    res.on("close", () => { clearInterval(ping); set.delete(res); if (!set.size) streams.delete(s.email); });
+  },
   "GET /cloud/me": (q, req, res, s) => {
     if (!s) return send(res, 200, { signedIn: false, app: appReady() });
     const inst = load().find((i) => i.email === s.email);
@@ -438,6 +459,7 @@ const routes = {
     const a = await verify(token);
     cfs.set(s.email, { token: seal(token), ...a });
     saveCfs();
+    notify(s.email);
     const gu = ghUser(s.login);
     if (gu) for (const i of load().filter((i) => i.email === s.email && !["live", "setting up"].includes(i.pages?.state))) {
       upsert({ ...i, pages: { ...i.pages, state: "setting up", detail: "starting", error: null, permsUrl: null } });
@@ -520,7 +542,7 @@ async function dispatch(req, res, u, s, b) {
     await h(u.searchParams, req, res, s, b);
 }
 
-const mcpServer = mcp({ BASE, DATA, seal, open, session, ghUser, fresh, dispatch, send, redirect, mac });
+const mcpServer = mcp({ notify, BASE, DATA, seal, open, session, ghUser, fresh, dispatch, send, redirect, mac });
 createServer(async (req, res) => {
   const u = new URL(req.url, BASE);
   const s = session(req);
