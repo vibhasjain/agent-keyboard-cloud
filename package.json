@@ -1,0 +1,6 @@
+{
+  "name": "agent-keyboard-cloud",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" }
+}
