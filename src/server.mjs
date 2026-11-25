@@ -1,4 +1,4 @@
-// The control plane's web server: /start (sign up and provision), /dashboard (manage),
+// The control plane's web server: /start (sign up and provision), /signin, /dashboard (manage),
 // and their JSON API under /cloud/. Zero deps. agentkeyboard.com proxies these paths here.
 //
 // Env: PORT, DATA_DIR, PUBLIC_URL (https://agentkeyboard.com), CLOUD_KEY (64 hex: encrypts
@@ -181,6 +181,7 @@ const routes = {
   "GET /": (q, req, res) => redirect(res, "/start"),
   "GET /start": (q, req, res) => send(res, 200, readFileSync(new URL("start.html", PAGES)), "text/html; charset=utf-8"),
   "GET /dashboard": (q, req, res) => send(res, 200, readFileSync(new URL("dashboard.html", PAGES)), "text/html; charset=utf-8"),
+  "GET /signin": (q, req, res) => send(res, 200, readFileSync(new URL("signin.html", PAGES)), "text/html; charset=utf-8"),
   "GET /cloud/cloud.css": (q, req, res) => send(res, 200, readFileSync(new URL("cloud.css", PAGES)), "text/css"),
   "GET /cloud/health": (q, req, res) => send(res, 200, { ok: true, app: appReady() }),
 

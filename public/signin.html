@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in to Agent Keyboard</title>
+<link rel="icon" href="https://agentkeyboard.com/favicon.png">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/cloud/cloud.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><a class="brand" href="https://agentkeyboard.com"><img src="https://agentkeyboard.com/typewriter-mark.png" alt=""><b>Agent Keyboard</b></a></div>
+  <h1>Sign in to Agent Keyboard</h1>
+  <div class="card"><p>Sign in with GitHub to set up Agent Keyboard or manage your instances.</p><a class="btn" href="/cloud/github/login?next=dashboard">Sign in with GitHub</a></div>
+</div>
+<script>
+fetch("/cloud/me").then((r) => r.json()).then((me) => { if (me.signedIn) location.replace("/dashboard"); }).catch(() => {});
+</script>
+<script src="https://agent-keyboard.fly.dev/widget.js" data-site="halo" data-accent="#ffb86b" data-theme="dark" data-summon="signed-out" defer></script>
+</body>
+</html>

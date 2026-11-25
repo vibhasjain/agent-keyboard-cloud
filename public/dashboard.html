@@ -10,7 +10,7 @@
 <body>
 <div class="wrap">
   <div class="top"><a class="brand" href="https://agentkeyboard.com"><img src="https://agentkeyboard.com/typewriter-mark.png" alt=""><b>Agent Keyboard</b></a><span id="who"></span></div>
-  <h1 id="h1">&nbsp;</h1>
+  <h1>Your instances</h1>
   <div id="app" aria-live="polite"><p>Loading…</p></div>
 </div>
 <script>
@@ -26,12 +26,7 @@ const LABEL = { restart: "Restarting…", update: "Updating… (about a minute)"
 
 async function render(note) {
   const me = await api("me").catch(() => ({}));
-  if (!me.signedIn) {
-    document.getElementById("h1").textContent = document.title = "Sign in to Agent Keyboard";
-    $app.innerHTML = `<div class="card"><p>Sign in with GitHub to set up Agent Keyboard or manage your instances.</p><a class="btn" href="/cloud/github/login?next=dashboard">Sign in with GitHub</a></div>`;
-    return;
-  }
-  document.getElementById("h1").textContent = "Your instances";
+  if (!me.signedIn) return location.replace("/signin");
   document.getElementById("who").innerHTML = `${esc(me.login)} · <a href="#" id="out">Sign out</a>`;
   document.getElementById("out").onclick = (e) => { e.preventDefault(); api("logout", {}).then(() => location.reload()); };
   let list;
