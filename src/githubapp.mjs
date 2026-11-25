@@ -71,11 +71,11 @@ export async function signIn(code) {
   return { token, expiresIn: t.expires_in, login: user.login, email: email.toLowerCase(), installations };
 }
 
-/** The settings page of the App's install on `owner`, where GitHub asks the user to accept new permissions. */
+/** The page where GitHub asks `owner` to accept the App's new permissions (straight to it: on mobile the "Review request" button is off-screen). */
 export async function installationPage(token, owner) {
   const d = await gh(token, "GET", "/user/installations?per_page=100");
   const i = d.installations.find((i) => i.app_id === Number(app.id) && i.account.login.toLowerCase() === owner.toLowerCase());
-  return i?.html_url ?? null;
+  return i ? `${i.html_url}/permissions/update` : null;
 }
 
 /** Repos the user gave the App, as "owner/name" with homepage. */
