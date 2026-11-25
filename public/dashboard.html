@@ -71,7 +71,7 @@ async function render(note) {
   const me = await api("me").catch(() => ({}));
   if (!me.signedIn) return location.replace("/signin");
   listen(me.events);
-  document.getElementById("who").innerHTML = `${esc(me.login)} · <a href="#" id="out">Sign out</a>`;
+  document.getElementById("who").innerHTML = `<a href="#" id="out" class="icon" title="Sign out (${esc(me.login)})" aria-label="Sign out (${esc(me.login)})"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></a>`;
   document.getElementById("out").onclick = (e) => { e.preventDefault(); api("logout", {}).then(() => location.reload()); };
   let list;
   let latest;
