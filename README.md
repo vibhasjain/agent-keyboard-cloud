@@ -23,6 +23,6 @@ GITHUB_TOKEN=… SUPABASE_URL=… SUPABASE_ANON_KEY=… SUPABASE_SERVICE_KEY=…
 ```
 fly apps create agent-keyboard-cloud && fly volumes create cloud_data -a agent-keyboard-cloud -r iad -s 1
 fly secrets set -a agent-keyboard-cloud CLOUD_KEY=$(openssl rand -hex 32) SETUP_KEY=… SUPABASE_URL=… SUPABASE_ANON_KEY=… SUPABASE_SERVICE_KEY=…
-fly deploy
+fly deploy   # after that, every push to main deploys (.github/workflows/deploy.yml, repo secret FLY_API_TOKEN = fly tokens create deploy -a agent-keyboard-cloud)
 ```
 Then open `https://agentkeyboard.com/cloud/github/setup?key=$SETUP_KEY` once, signed in to the GitHub account that should own the App (`&org=<org>` for an org).
