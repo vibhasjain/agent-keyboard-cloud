@@ -30,7 +30,7 @@ function hosting(i, me) {
   const p = i.pages ?? {};
   if (p.state === "live") return `<div class="meta">Hosted on Cloudflare Pages: <a href="${esc(p.live)}" target="_blank" rel="noopener">${esc(p.live.replace("https://", ""))}</a>${p.staging ? ` · staging <a href="${esc(p.staging)}" target="_blank" rel="noopener">${esc(p.staging.replace("https://", ""))}</a>` : ""} · sandboxes on. Each push deploys in about a minute.</div>`;
   if (p.state === "setting up") return `<div class="meta">Cloudflare Pages: ${esc(p.detail || "setting up")}…</div>`;
-  const err = p.state === "error" ? `<p class="err">${esc(p.error)}</p>` : "";
+  const err = p.state === "error" ? `<p class="err">${esc(p.error)}</p>${p.permsUrl ? `<div class="row"><a class="btn ghost" href="${esc(p.permsUrl)}" target="_blank" rel="noopener">Review permissions on GitHub</a></div>` : ""}` : "";
   if (me.cloudflare) return `${err}<div class="meta">Serve it from Cloudflare Pages (${esc(me.cloudflare)}): fast even when the Sprite sleeps, a preview for every branch, and sandboxes.</div>`;
   return `${err}<div class="meta">Connect Cloudflare to serve this site from Cloudflare Pages: fast even when the Sprite sleeps, a preview for every branch, and sandboxes.</div>`;
 }

@@ -11,7 +11,7 @@ import { createServer } from "node:http";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { claudeLoginFinish, claudeLoginStart } from "./claude.mjs";
 import { mint, pollClaim, register, sprites } from "./fly.mjs";
-import { appReady, authorizeUrl, createdFromManifest, installUrl, loadApp, manifest, signIn, userRepos } from "./githubapp.mjs";
+import { appReady, authorizeUrl, createdFromManifest, installationPage, installUrl, loadApp, manifest, signIn, userRepos } from "./githubapp.mjs";
 import { addTag, getRepo, putSecret, putVariable, writeFile } from "./github.mjs";
 import { TOKEN_URL, WORKFLOW, ensureProject, pagesMemory, verify } from "./cloudflare.mjs";
 import { ensureSprite, provision, slug, spriteName } from "./provision.mjs";
@@ -181,7 +181,9 @@ async function setupPages(id, ghToken, c) {
     set({ state: "live", detail: "", live: `https://${p.subdomain}`, staging: inst.staging ? `https://ak-staging.${p.subdomain}` : null });
   } catch (e) {
     console.error("pages", id, e.message);
-    set({ state: "error", detail: "", error: /Resource not accessible by integration/.test(e.message) ? "Agent Keyboard needs new GitHub permissions (secrets, variables, workflows). Accept them on GitHub, then try again." : e.message });
+    const perms = /Resource not accessible by integration/.test(e.message);
+    const permsUrl = perms ? await installationPage(ghToken, load().find((x) => x.id === id)?.repo.split("/")[0] ?? "").catch(() => null) : null;
+    set({ state: "error", detail: "", permsUrl, error: perms ? "Agent Keyboard needs new GitHub permissions (secrets, variables, workflows). Accept them on GitHub, then try again." : e.message });
   }
 }
 const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
@@ -380,7 +382,7 @@ createServer(async (req, res) => {
         if (!gu) return send(res, 401, { error: "Sign in with GitHub again" });
         if (!c) return send(res, 400, { error: "Connect Cloudflare first" });
         if (inst.pages?.state === "setting up") return send(res, 409, { error: "Already setting up" });
-        upsert({ ...inst, pages: { ...inst.pages, state: "setting up", detail: "starting", error: null } });
+        upsert({ ...inst, pages: { ...inst.pages, state: "setting up", detail: "starting", error: null, permsUrl: null } });
         setupPages(inst.id, gu.token, c);
         return send(res, 200, { ok: true });
       }
