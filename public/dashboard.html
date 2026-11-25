@@ -148,6 +148,8 @@ function listen(url) {
     if (rev && e.data !== rev && !document.activeElement?.matches("input")) render();
     rev = e.data;
   };
+  // refused (the 24 h link expired, or the server was mid-deploy): get a fresh link and reconnect
+  events.onerror = () => { if (events.readyState === EventSource.CLOSED) { events = null; setTimeout(render, 5000); } };
 }
 </script>
 <script src="https://agent-keyboard.fly.dev/widget.js" data-site="halo" data-accent="#ffb86b" data-theme="dark" data-summon="signed-out" defer></script>
