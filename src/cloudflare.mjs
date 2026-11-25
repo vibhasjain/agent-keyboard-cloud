@@ -101,3 +101,41 @@ When the owner asks to deploy, publish, ship or "go live":
 Never push to \`${live}\` for any other reason.
 `;
 }
+
+// ---- custom domains (M4) ----
+const domains = (a, p) => `/accounts/${a}/pages/projects/${p}/domains`;
+const ok404 = (e) => (e.status === 404 ? null : Promise.reject(e));
+/** Attach `host` to the Pages project (fine if it already is). */
+export const addPagesDomain = (token, a, p, host) =>
+  cf(token, "POST", domains(a, p), { name: host }).catch((e) => (/already/i.test(e.message) ? null : Promise.reject(e)));
+export const removePagesDomain = (token, a, p, host) => cf(token, "DELETE", `${domains(a, p)}/${host}`).catch(ok404);
+/** Pages' view of the domain: { status: "active" | "pending" | …, verification_data, validation_data }. */
+export const pagesDomain = (token, a, p, host) => cf(token, "GET", `${domains(a, p)}/${host}`);
+
+/** The zone in this account that holds `host` (host itself or a parent), or null. */
+export async function findZone(token, accountId, host) {
+  const labels = host.split(".");
+  for (let i = 0; i < labels.length - 1; i++) {
+    const [z] = await cf(token, "GET", `/zones?name=${labels.slice(i).join(".")}&account.id=${accountId}`);
+    if (z) return z;
+  }
+  return null;
+}
+
+/** Point `host` at the Pages project: one proxied CNAME, replacing the name's A/AAAA/CNAME records. */
+export async function pointDns(token, zoneId, host, target) {
+  const recs = await cf(token, "GET", `/zones/${zoneId}/dns_records?name=${host}&per_page=50`);
+  const done = recs.some((r) => r.type === "CNAME" && r.content === target);
+  for (const r of recs) if (["A", "AAAA", "CNAME"].includes(r.type) && !(r.type === "CNAME" && r.content === target)) await cf(token, "DELETE", `/zones/${zoneId}/dns_records/${r.id}`);
+  if (!done) await cf(token, "POST", `/zones/${zoneId}/dns_records`, { type: "CNAME", name: host, content: target, proxied: true, ttl: 1 });
+}
+
+// Public DNS (DNS-over-HTTPS), for domains whose DNS isn't on Cloudflare.
+async function doh(name, type) {
+  const r = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(name)}&type=${type}`).then((r) => r.json()).catch(() => ({}));
+  return (r.Answer ?? []).map((a) => ({ ...a, name: a.name.replace(/\.$/, ""), data: String(a.data).replace(/\.$/, "") }));
+}
+/** A root domain (it has its own SOA) needs its DNS on Cloudflare for Pages. */
+export const isApex = async (host) => (await doh(host, "SOA")).some((a) => a.type === 6 && a.name === host);
+/** What `host` is a CNAME for right now, or null. */
+export const cnameOf = async (host) => (await doh(host, "CNAME")).find((a) => a.type === 5)?.data ?? null;

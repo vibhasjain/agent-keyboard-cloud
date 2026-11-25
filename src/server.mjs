@@ -13,7 +13,7 @@ import { claudeLoginFinish, claudeLoginStart } from "./claude.mjs";
 import { mint, pollClaim, register, sprites } from "./fly.mjs";
 import { appReady, authorizeUrl, createdFromManifest, installationPage, installUrl, loadApp, manifest, signIn, userRepos } from "./githubapp.mjs";
 import { addTag, getRepo, putSecret, putVariable, writeFile } from "./github.mjs";
-import { TOKEN_URL, WORKFLOW, ensureProject, pagesMemory, verify } from "./cloudflare.mjs";
+import { TOKEN_URL, WORKFLOW, addPagesDomain, cnameOf, ensureProject, findZone, isApex, pagesDomain, pagesMemory, pointDns, removePagesDomain, verify } from "./cloudflare.mjs";
 import { ensureSprite, provision, slug, spriteName } from "./provision.mjs";
 
 const env = process.env;
@@ -188,6 +188,43 @@ async function setupPages(id, ghToken, c) {
 }
 const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
+// ---- custom domain (spec #13 M4): attach to Pages, point DNS when the zone is on Cloudflare, else show what to add ----
+const HOST = /^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+async function checkDomain(id, c) {
+  const inst = load().find((x) => x.id === id);
+  const d = inst?.domain;
+  if (!d) return;
+  const token = open(c.token), { project, sub } = inst.pages;
+  const next = { ...d, checkedAt: Date.now(), error: null };
+  try {
+    const z = await findZone(token, c.accountId, d.host);
+    next.zone = z && { status: z.status, ns: z.name_servers ?? [] };
+    if (z && !d.dns) { await pointDns(token, z.id, d.host, sub); next.dns = true; }
+    if (!z) [next.apex, next.now] = await Promise.all([isApex(d.host), cnameOf(d.host)]);
+    const pd = await pagesDomain(token, c.accountId, project, d.host);
+    next.status = pd.status === "active" ? "active" : "pending";
+  } catch (e) {
+    console.error("domain", id, e.message);
+    next.error = e.message;
+  }
+  const cur = load().find((x) => x.id === id);
+  if (cur?.domain?.host === d.host) upsert({ ...cur, domain: next });
+}
+/** Let the bar on `origin` call the Sprite (CORS): add it to the Sprite's EXTRA_ORIGINS. */
+async function addOrigin(inst, origin) {
+  const api = sprites(await mint(open(inst.assertion)));
+  const { out } = await api.exec(inst.id, `. ~/ak.env; printf '%s' "$EXTRA_ORIGINS"`, { timeoutMs: 60e3 });
+  const had = out.trim().split(",").filter(Boolean);
+  if (had.includes(origin)) return;
+  const line = `EXTRA_ORIGINS=${shq([...had, origin].join(","))}\n`;
+  await api.exec(inst.id, [
+    `grep -v '^EXTRA_ORIGINS=' ~/ak.env > ~/ak.env.new`,
+    `printf %s ${shq(Buffer.from(line).toString("base64"))} | base64 -d >> ~/ak.env.new`,
+    `chmod 600 ~/ak.env.new && mv ~/ak.env.new ~/ak.env`,
+    `sprite-env services restart ak`,
+  ].join(" && "), { timeoutMs: 120e3 });
+}
+
 // ---- dashboard actions ----
 async function act(inst, action) {
   const creds = await mint(open(inst.assertion));
@@ -204,6 +241,8 @@ async function act(inst, action) {
 }
 
 async function status(inst) {
+  const c = inst.domain?.status === "pending" && Date.now() - (inst.domain.checkedAt ?? 0) > 30e3 && cfs.get(inst.email);
+  if (c) { await checkDomain(inst.id, c); inst = load().find((x) => x.id === inst.id) ?? inst; }
   try {
     const s = await sprites(await mint(open(inst.assertion))).get(inst.id);
     return { ...pub(inst), status: s.status ?? "unknown" };
@@ -371,7 +410,7 @@ createServer(async (req, res) => {
       const inst = s && load().find((i) => i.id === o[1] && i.email === s.email);
       if (!inst) return redirect(res, "/dashboard");
       const pg = inst.pages?.state === "live" && inst.pages;
-      const site = pg ? pg.staging ?? pg.live : inst.starter ? inst.url : `https://${inst.domain}`;
+      const site = pg ? pg.staging ?? (inst.domain?.status === "active" ? `https://${inst.domain.host}` : pg.live) : inst.starter ? inst.url : `https://${inst.domain}`;
       const r = await fetch(`${supabase.url}/auth/v1/admin/generate_link`, {
         method: "POST",
         headers: { apikey: supabase.serviceKey, Authorization: `Bearer ${supabase.serviceKey}`, "Content-Type": "application/json" },
@@ -381,9 +420,9 @@ createServer(async (req, res) => {
       const token = d.hashed_token ?? d.properties?.hashed_token;
       return redirect(res, token ? `${site}/#ak_handoff=${encodeURIComponent(token)}` : site);
     }
-    const m = u.pathname.match(/^\/cloud\/instances\/([\w-]+)\/(restart|update|delete|tag|pages)$/);
+    const m = u.pathname.match(/^\/cloud\/instances\/([\w-]+)\/(restart|update|delete|tag|pages|domain|domain-remove)$/);
     if (req.method === "POST" && m) {
-      await body(req);
+      const b = await body(req);
       const inst = s && load().find((i) => i.id === m[1] && i.email === s.email);
       if (!inst) return send(res, 404, { error: "No such instance" });
       if (m[2] === "tag") {
@@ -392,6 +431,23 @@ createServer(async (req, res) => {
         const path = await addTag(gu.token, inst.repo, inst.tag, inst.staging ? "ak-staging" : undefined);
         upsert({ ...inst, tagPath: path });
         return send(res, 200, { ok: true, path });
+      }
+      if (m[2] === "domain" || m[2] === "domain-remove") {
+        const c = cfs.get(s.email);
+        if (!c || inst.pages?.state !== "live") return send(res, 400, { error: "Host the site on Cloudflare Pages first" });
+        const token = open(c.token);
+        if (m[2] === "domain-remove") {
+          if (inst.domain) await removePagesDomain(token, c.accountId, inst.pages.project, inst.domain.host);
+          upsert({ ...inst, domain: null });
+          return send(res, 200, { ok: true });
+        }
+        const host = String(b?.host ?? "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/[/:].*$/, "").replace(/\.$/, "");
+        if (!HOST.test(host) || /\.(pages\.dev|sprites\.app|workers\.dev)$/.test(host)) return send(res, 400, { error: "Type a domain like www.example.com" });
+        await addPagesDomain(token, c.accountId, inst.pages.project, host);
+        upsert({ ...inst, domain: { host, status: "pending" } });
+        await addOrigin(inst, `https://${host}`);
+        await checkDomain(inst.id, c);
+        return send(res, 200, { ok: true });
       }
       if (m[2] === "pages") {
         const gu = ghUser(s.login), c = cfs.get(s.email);
