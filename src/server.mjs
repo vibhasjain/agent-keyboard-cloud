@@ -119,10 +119,11 @@ async function runProvision(flow, code) {
     flow.assertion = null;
     step(flow, "done", { result: { url: r.url, tag: r.tag, starter: r.starter, repo: r.repo } });
   } catch (e) {
+    // Claude's login is single-use: drop the old link (the page waits) and start a fresh one.
+    if (flow.step === "connector") flow.loginUrl = null;
     step(flow, flow.step === "connector" ? "claude" : "error", { error: e.message });
     if (flow.step === "claude") {
-      // Claude's login is single-use: start a fresh one so the user can retry.
-      mint(flow.assertion).then((c) => claudeLoginStart(sprites(c), flow.sprite)).then((u) => (flow.loginUrl = u), () => {});
+      mint(flow.assertion).then((c) => claudeLoginStart(sprites(c), flow.sprite)).then((u) => (flow.loginUrl = u), (e2) => step(flow, "error", { error: e2.message }));
     }
   }
 }

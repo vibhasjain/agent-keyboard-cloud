@@ -93,7 +93,7 @@ function show(f) {
     $app.innerHTML = `<p><b>3. Sign in to Claude.</b> Approve on claude.ai, then paste the code it shows you here. The token goes into a connector in your own Fly account.</p>
       ${f.error ? `<p class="err">${esc(f.error)}</p>` : ""}
       ${f.loginUrl ? `<a class="btn" href="${esc(f.loginUrl)}" target="_blank" rel="noopener">Sign in to Claude</a>
-      <form id="c"><label for="code">Code from Claude</label><input id="code" autocomplete="off" required><div class="row"><button class="btn">Continue</button></div></form>` : `<p>Getting a fresh sign-in link…</p>`}
+      <form id="c"><label for="code">Code from Claude</label><input id="code" type="password" autocomplete="off" spellcheck="false" required><div class="row"><button class="btn">Continue</button></div></form>` : `<p>Getting a fresh sign-in link…</p>`}
       ${steps(f.step)}`;
     const form = document.getElementById("c");
     if (form) {
