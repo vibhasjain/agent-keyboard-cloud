@@ -39,5 +39,5 @@ pre{ font:13px/1.5 var(--mono); white-space:pre-wrap; word-break:break-all; back
 @media (prefers-reduced-motion:reduce){ .switch,.switch::after{ transition:none; } }
 .head h2{ display:flex; align-items:center; gap:6px; min-width:0; } .head h2 a{ color:var(--ink); overflow-wrap:anywhere; } .head h2 a:hover{ color:var(--amber); }
 .dot.bad{ background:var(--err); } .note{ margin:0 0 4px; } .acct{ margin-top:22px; }
-.danger{ margin-left:auto; border:0; background:none; padding:11px 4px; font:500 15px var(--sans); color:var(--ink-3); cursor:pointer; } .danger:hover{ color:var(--err); } .danger:disabled{ opacity:.5; cursor:default; }
+.danger{ margin-left:auto; border:0; background:none; padding:11px 4px; font:500 15px var(--sans); color:var(--err); cursor:pointer; display:inline-flex; align-items:center; } .danger:hover{ opacity:.8; } .danger:disabled{ opacity:.5; cursor:default; }
 .more{ margin-top:12px; } .more summary{ font-size:13px; color:var(--ink-3); cursor:pointer; width:max-content; } .more summary:hover{ color:var(--ink-2); }
