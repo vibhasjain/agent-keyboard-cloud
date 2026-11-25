@@ -46,3 +46,23 @@ export async function addDeployKey(token, fullName, title, key) {
     throw e;
   }
 }
+
+/** Commit the bar's script tag into the site's index.html, before </body>. Returns the path. */
+export async function addTag(token, fullName, tag) {
+  for (const path of ["index.html", "public/index.html", "site/index.html", "docs/index.html", "src/index.html"]) {
+    const f = await gh(token, "GET", `/repos/${fullName}/contents/${path}`).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
+    if (!f?.content) continue;
+    const html = Buffer.from(f.content, "base64").toString("utf8");
+    if (html.includes(tag.match(/src="([^"]+)"/)[1])) return path; // already there
+    const i = html.toLowerCase().lastIndexOf("</body>");
+    if (i < 0) continue;
+    const next = `${html.slice(0, i)}${tag}\n${html.slice(i)}`;
+    await gh(token, "PUT", `/repos/${fullName}/contents/${path}`, {
+      message: "Add the Agent Keyboard bar",
+      content: Buffer.from(next).toString("base64"),
+      sha: f.sha,
+    });
+    return path;
+  }
+  throw Object.assign(new Error("Couldn't find an index.html with a </body> to add it to. Paste the tag into your pages yourself."), { code: 422 });
+}

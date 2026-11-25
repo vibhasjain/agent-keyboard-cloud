@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { claudeLoginFinish, claudeLoginStart } from "./claude.mjs";
 import { mint, pollClaim, register, sprites } from "./fly.mjs";
 import { appReady, authorizeUrl, createdFromManifest, installUrl, loadApp, manifest, signIn, userRepos } from "./githubapp.mjs";
+import { addTag } from "./github.mjs";
 import { ensureSprite, provision, slug, spriteName } from "./provision.mjs";
 
 const env = process.env;
@@ -280,11 +281,16 @@ createServer(async (req, res) => {
       const token = d.hashed_token ?? d.properties?.hashed_token;
       return redirect(res, token ? `${site}/#ak_handoff=${encodeURIComponent(token)}` : site);
     }
-    const m = u.pathname.match(/^\/cloud\/instances\/([\w-]+)\/(restart|update|delete)$/);
+    const m = u.pathname.match(/^\/cloud\/instances\/([\w-]+)\/(restart|update|delete|tag)$/);
     if (req.method === "POST" && m) {
       await body(req);
       const inst = s && load().find((i) => i.id === m[1] && i.email === s.email);
       if (!inst) return send(res, 404, { error: "No such instance" });
+      if (m[2] === "tag") {
+        const gu = users.get(s.login);
+        if (!gu || inst.starter) return send(res, gu ? 400 : 401, { error: gu ? "Starter sites already have the bar" : "Sign in with GitHub again" });
+        return send(res, 200, { ok: true, path: await addTag(gu.token, inst.repo, inst.tag) });
+      }
       await act(inst, m[2]);
       return send(res, 200, { ok: true });
     }

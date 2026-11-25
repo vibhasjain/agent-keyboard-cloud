@@ -22,7 +22,7 @@ const api = async (path, body) => {
   if (!r.ok) throw new Error(d.error || "Something went wrong (" + r.status + ")");
   return d;
 };
-const LABEL = { restart: "Restarting…", update: "Updating… (about a minute)", delete: "Deleting…" };
+const LABEL = { restart: "Restarting…", update: "Updating… (about a minute)", delete: "Deleting…", tag: "Adding…" };
 
 async function render(note) {
   const me = await api("me").catch(() => ({}));
@@ -42,14 +42,14 @@ async function render(note) {
       <div class="meta">Repo <a href="https://github.com/${esc(i.repo)}" target="_blank" rel="noopener">${esc(i.repo)}</a> · ${i.starter ? `site <a href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar">${esc(i.url)}</a>` : `site <a href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar">${esc(i.domain)}</a>`}</div>
       ${i.starter ? "" : `<pre>${esc(i.tag)}</pre>`}
       ${i.status === "reconnect Fly" ? `<p class="err">Our access to your Fly account expired or was revoked. Delete and set up again to reconnect.</p>` : ""}
-      <div class="row"><button class="btn ghost" data-a="restart">Restart</button><button class="btn ghost" data-a="update">Update</button><button class="btn ghost" data-a="delete">Delete</button></div>
+      <div class="row">${i.starter ? "" : `<button class="btn ghost" data-a="tag" title="Commits the tag to your repo's index.html">Add the tag for me</button>`}<button class="btn ghost" data-a="restart">Restart</button><button class="btn ghost" data-a="update">Update</button><button class="btn ghost" data-a="delete">Delete</button></div>
     </div>`).join("");
   $app.querySelectorAll("button[data-a]").forEach((b) => (b.onclick = async () => {
     const id = b.closest(".inst").dataset.id, a = b.dataset.a;
     if (a === "delete" && !confirm(`Delete ${id}? This removes the Sprite and its Claude connector from your Fly account. Your repo stays.`)) return;
     b.closest(".row").querySelectorAll("button").forEach((x) => (x.disabled = true));
     b.textContent = LABEL[a];
-    try { await api(`instances/${id}/${a}`, {}); render(a === "delete" ? `Deleted ${id}.` : `${id}: ${a} done.`); }
+    try { const r = await api(`instances/${id}/${a}`, {}); render(a === "delete" ? `Deleted ${id}.` : a === "tag" ? `Added the tag to ${r.path}. Your host redeploys from that commit.` : `${id}: ${a} done.`); }
     catch (e) { render(e.message); }
   }));
 }
