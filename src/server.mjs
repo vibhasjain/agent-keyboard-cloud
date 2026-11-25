@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { claudeLoginFinish, claudeLoginStart } from "./claude.mjs";
 import { mint, pollClaim, register, sprites } from "./fly.mjs";
 import { appReady, authorizeUrl, createdFromManifest, installUrl, loadApp, manifest, signIn, userRepos } from "./githubapp.mjs";
-import { ensureSprite, provision, slug } from "./provision.mjs";
+import { ensureSprite, provision, slug, spriteName } from "./provision.mjs";
 
 const env = process.env;
 const DATA = env.DATA_DIR ?? "./data";
@@ -238,7 +238,7 @@ const routes = {
     } else {
       name = slug(String(b.name ?? "my-site"));
     }
-    const flow = { email: s.email, login: s.login, repo, domain, name, sprite: `ak-${slug(repo ? repo.split("/")[1] : name)}` };
+    const flow = { email: s.email, login: s.login, repo, domain, name, sprite: spriteName(slug(repo ? repo.split("/")[1] : name)) };
     step(flow, "fly", { detail: "registering with Fly" });
     flows.set(s.email, flow);
     runFly(flow);

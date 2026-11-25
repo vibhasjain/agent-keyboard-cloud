@@ -11,6 +11,9 @@ const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
 export const slug = (s) => s.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "site";
 
+/** Our Sprites are all named ak-*; don't double the prefix ("ak-test" stays "ak-test"). */
+export const spriteName = (siteId) => (siteId.startsWith("ak-") ? siteId : `ak-${siteId}`);
+
 /** Create the Sprite `name` unless it exists, make its URL public, return the URL. */
 export async function ensureSprite(api, name) {
   let sprite = await api.get(name).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
@@ -74,7 +77,7 @@ export async function provision(opts, progress = () => {}) {
   progress("github: checking the repo");
   let repo = starter ? null : await getRepo(githubToken, opts.repo);
   const siteId = slug(starter ? opts.name ?? "my-site" : repo.name);
-  const name = `ak-${siteId}`;
+  const name = spriteName(siteId);
 
   progress("claude: finding the connector");
   const conns = await api.connections();
