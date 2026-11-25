@@ -46,6 +46,10 @@ function notify(email) {
   revs.set(email, rev);
   for (const res of streams.get(email) ?? []) res.write(`data: ${rev}\n\n`);
 }
+const eventsUrl = (email) => {
+  const e64 = Buffer.from(email).toString("base64url"), exp = Date.now() + 24 * 3600e3;
+  return `${env.FLY_APP_NAME ? `https://${env.FLY_APP_NAME}.fly.dev` : BASE}/cloud/events?t=${e64}.${exp}.${mac(`events ${email} ${exp}`)}`;
+};
 const upsert = (inst) => save([...load().filter((i) => i.id !== inst.id), { ...inst, updatedAt: new Date().toISOString() }]);
 function seal(s) {
   const iv = randomBytes(12), c = createCipheriv("aes-256-gcm", KEY, iv);
@@ -398,8 +402,13 @@ const routes = {
     send(res, 200, { ok: true });
   },
 
-  // Signed out: 204, which tells EventSource not to reconnect.
-  "GET /cloud/events": (q, req, res, s) => {
+  // Opened straight on the Fly app (Netlify's proxy buffers streams), so it's authorized by the signed URL from
+  // /cloud/me rather than the cookie. Signed out or expired: 204, which tells EventSource not to reconnect.
+  "GET /cloud/events": (q, req, res) => {
+    const [e64 = "", exp = "0", sig = ""] = (q.get("t") ?? "").split(".");
+    const email = Buffer.from(e64, "base64url").toString(), want = mac(`events ${email} ${exp}`);
+    const s = email && Number(exp) > Date.now() && sig.length === want.length && timingSafeEqual(Buffer.from(sig), Buffer.from(want)) && { email };
+    res.setHeader("Access-Control-Allow-Origin", "*"); // the stream only carries a revision number
     if (!s) return (res.writeHead(204), res.end());
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", "X-Accel-Buffering": "no" });
     res.write(`retry: 3000\ndata: ${revs.get(s.email) ?? BOOT}\n\n`);
@@ -411,7 +420,7 @@ const routes = {
   "GET /cloud/me": (q, req, res, s) => {
     if (!s) return send(res, 200, { signedIn: false, app: appReady() });
     const inst = load().find((i) => i.email === s.email);
-    send(res, 200, { signedIn: true, login: s.login, email: s.email, github: !!ghUser(s.login), installUrl: appReady() ? installUrl("start") : null, instance: inst && pub(inst), cloudflare: cfs.get(s.email)?.accountName ?? null, cloudflareTokenUrl: TOKEN_URL, claude: mcpServer.claude(s.login), flow: flowView(flows.get(s.email)) });
+    send(res, 200, { signedIn: true, login: s.login, email: s.email, github: !!ghUser(s.login), installUrl: appReady() ? installUrl("start") : null, instance: inst && pub(inst), cloudflare: cfs.get(s.email)?.accountName ?? null, cloudflareTokenUrl: TOKEN_URL, claude: mcpServer.claude(s.login), events: eventsUrl(s.email), flow: flowView(flows.get(s.email)) });
   },
   "GET /cloud/repos": async (q, req, res, s) => {
     const u = s && ghUser(s.login);

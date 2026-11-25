@@ -67,6 +67,7 @@ function cfForm(me) {
 async function render(note) {
   const me = await api("me").catch(() => ({}));
   if (!me.signedIn) return location.replace("/signin");
+  listen(me.events);
   document.getElementById("who").innerHTML = `${esc(me.login)} · <a href="#" id="out">Sign out</a>`;
   document.getElementById("out").onclick = (e) => { e.preventDefault(); api("logout", {}).then(() => location.reload()); };
   let list;
@@ -139,11 +140,15 @@ async function render(note) {
 render();
 // Server push: the stream sends a revision that moves whenever this user's sites or connections change
 // (Claude connected, a site updated, a domain went live…). Re-render on a change, unless they're typing in a field.
-let rev;
-new EventSource("/cloud/events").onmessage = (e) => {
-  if (rev && e.data !== rev && !document.activeElement?.matches("input")) render();
-  rev = e.data;
-};
+let rev, events;
+function listen(url) {
+  if (events || !url) return;
+  events = new EventSource(url);
+  events.onmessage = (e) => {
+    if (rev && e.data !== rev && !document.activeElement?.matches("input")) render();
+    rev = e.data;
+  };
+}
 </script>
 <script src="https://agent-keyboard.fly.dev/widget.js" data-site="halo" data-accent="#ffb86b" data-theme="dark" data-summon="signed-out" defer></script>
 </body>
