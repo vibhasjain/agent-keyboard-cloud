@@ -33,6 +33,10 @@ function hosting(i, me) {
   const err = p.state === "error" ? `<p class="err">${esc(p.error)}</p>${p.permsUrl ? `<div class="row"><a class="btn ghost" href="${esc(p.permsUrl)}" target="_blank" rel="noopener">Review permissions on GitHub</a></div>` : ""}` : "";
   return me.cloudflare ? `${err}<div class="meta">Not on Cloudflare Pages yet.</div>` : "";
 }
+// Claude: its own Add custom connector dialog with our /mcp filled in, or (once connected) a new chat.
+const claudeBtn = (me) => me.claude
+  ? `<a class="btn ghost" href="https://claude.ai/new?q=${encodeURIComponent("Let's work on my Agent Keyboard sites")}" target="_blank" rel="noopener">Create in Claude</a>`
+  : `<a class="btn ghost" href="https://claude.ai/customize/connectors?modal=add-custom-connector&amp;connectorName=Agent%20Keyboard&amp;connectorUrl=${encodeURIComponent("https://agentkeyboard.com/mcp")}" target="_blank" rel="noopener">Connect to Claude</a>`;
 // The disconnect icon that removes a custom domain.
 const unlink = (host) => `<button class="icon" data-a="domain-remove" title="Disconnect ${esc(host)}" aria-label="Disconnect ${esc(host)}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18.84 12.25 1.72-1.71a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="m5.17 11.75-1.71 1.71a5 5 0 0 0 7.07 7.07l1.71-1.71"/><path d="M8 2v3M2 8h3M16 19v3M19 16h3"/></svg></button>`;
 // Custom domain (spec #13 M4): add one, then what to do until Pages says it's active.
@@ -78,7 +82,7 @@ async function render(note) {
       ${hosting(i, me)}
       ${i.status === "reconnect Fly" ? `<p class="err">Our access to your Fly account expired or was revoked. Delete and set up again to reconnect.</p>` : ""}
       <div class="row">${!me.cloudflare || i.pages?.state === "live" || i.pages?.state === "setting up" ? "" : `<button class="btn" data-a="pages">${i.pages?.state === "error" ? "Retry Cloudflare Pages" : "Host on Cloudflare Pages"}</button>`}${i.starter || i.tagPath ? "" : `<button class="btn ghost" data-a="tag" title="Commits the tag to your repo's index.html">Add the tag for me</button>`}<button class="btn ghost" data-a="restart">Restart</button><button class="btn ghost" data-a="update">Update</button><button class="btn ghost" data-a="delete">Delete</button></div>
-    </div>`).join("") + `<div class="row"><a class="btn ghost" href="/start">Add another site</a></div>${me.cloudflare ? `<p class="small">Cloudflare: connected (${esc(me.cloudflare)}) · <a href="#" id="cfre">Use a different token</a></p>` : ""}<div id="cfslot"></div><p class="small">Prefer Claude? Add our MCP server, <b>https://agentkeyboard.com/mcp</b>, as a custom connector in Claude (Settings → Connectors), or in Claude Code: <code>claude mcp add --transport http agent-keyboard https://agentkeyboard.com/mcp</code>. Claude can then set up and manage your sites too.</p>`;
+    </div>`).join("") + `<div class="row"><a class="btn ghost" href="/start">Add another site</a>${claudeBtn(me)}</div>${me.cloudflare ? `<p class="small">Cloudflare: connected (${esc(me.cloudflare)}) · <a href="#" id="cfre">Use a different token</a></p>` : ""}<div id="cfslot"></div>`;
   clearTimeout(timer);
   if (list.some((i) => i.pages?.state === "setting up")) timer = setTimeout(() => render(note), 3000);
   else if (list.some((i) => i.customDomain?.status === "pending")) timer = setTimeout(() => render(note), 30e3);

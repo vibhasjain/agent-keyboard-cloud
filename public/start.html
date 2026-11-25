@@ -13,7 +13,7 @@
   <h1>Your own <em>Agent Keyboard</em>, running on a Fly.io Sprite.</h1>
   <p>Five steps, no terminal. Everything runs in <b>your</b> Fly and Cloudflare accounts with <b>your</b> Claude subscription. We only set it up.</p>
   <div id="app" class="card" aria-live="polite"><p>Loading…</p></div>
-  <p class="small">Prefer Claude? Add our MCP server, <b>https://agentkeyboard.com/mcp</b>, as a custom connector in Claude (Settings → Connectors), or in Claude Code: <code>claude mcp add --transport http agent-keyboard https://agentkeyboard.com/mcp</code>. Claude walks you through the same steps.</p>
+  <p class="small">Prefer Claude? <a href="https://claude.ai/customize/connectors?modal=add-custom-connector&amp;connectorName=Agent%20Keyboard&amp;connectorUrl=https%3A%2F%2Fagentkeyboard.com%2Fmcp" target="_blank" rel="noopener">Connect to Claude</a> and it walks you through the same steps.</p>
   <p class="small">What we keep: your GitHub email and login, the repo you pick, and an encrypted Fly credential that lets the dashboard restart, update or delete your Sprite. You can revoke it any time in your Fly dashboard under Tokens ("Agent (auth.md)"). Your Cloudflare token goes into your repo's GitHub Actions secrets (and is kept encrypted here to set up your other sites); revoke it any time on Cloudflare's token page. Your Claude token goes into a connector in your Fly account and never reaches us. A light instance costs about $1/month on Fly. New Fly accounts get $1 of credit for 7 days, then need a card.</p>
 </div>
 <script>

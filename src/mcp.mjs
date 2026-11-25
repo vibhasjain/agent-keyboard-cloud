@@ -71,7 +71,7 @@ export function mcp({ BASE, DATA, seal, open, ghUser, fresh, dispatch, send, red
 <div class="row"><button class="btn" name="allow" value="1">Allow</button><button class="btn ghost" name="deny" value="1">Cancel</button></div></form></div></div></body></html>`, "text/html; charset=utf-8");
   }
 
-  return async function handle(req, res, u, s) {
+  return Object.assign(async function handle(req, res, u, s) {
     const path = u.pathname.replace(/\/$/, "");
     if (req.method === "OPTIONS" && (path === "/mcp" || path.startsWith("/oauth/") || path.startsWith("/.well-known/oauth-"))) return (res.writeHead(204, { ...CORS, "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS" }), res.end(), true);
     if (req.method === "GET" && path.startsWith("/.well-known/oauth-protected-resource")) return (json(res, 200, metaResource), true);
@@ -133,7 +133,10 @@ export function mcp({ BASE, DATA, seal, open, ghUser, fresh, dispatch, send, red
       return true;
     }
     return false;
-  };
+  }, {
+    // Whether this user has Claude connected: an unexpired grant to a client that registered as Claude.
+    claude: (login) => Object.values(db.refresh).some((g) => g.login === login && g.exp > Date.now() && /claude/i.test(db.clients[g.client]?.client_name ?? "")),
+  });
 
   // ---- tools ----
   function tools(s, req) {
