@@ -285,7 +285,8 @@ async function autoUpdate() {
     } catch (e) { console.error("autoupdate", inst.id, e.message); }
   }
 }
-const tick = () => autoUpdate().catch((e) => console.error("autoupdate", e.message));
+let updating = null; // one pass at a time (the hourly timer and a release ping can coincide)
+const tick = () => (updating ??= autoUpdate().catch((e) => console.error("autoupdate", e.message)).finally(() => { updating = null; }));
 setTimeout(tick, 60e3).unref(); // also right after a deploy, so frequent deploys never starve it
 setInterval(tick, 3600e3).unref();
 
@@ -539,6 +540,14 @@ async function dispatch(req, res, u, s, b) {
       upsert({ ...inst, joins: rest });
       if (join.exp < Date.now() || !inst.team?.includes(join.email)) return send(res, 410, "This invite link has expired. Ask whoever invited you for a new one.", "text/plain; charset=utf-8");
       return redirect(res, await handoff(inst, join.email));
+    }
+    // agent-keyboard's deploy workflow pings this after each server/widget push, so Sprites update now, not at the next hourly pass.
+    if (req.method === "POST" && u.pathname === "/cloud/release") {
+      const k = Buffer.from(req.headers["x-release-key"] ?? ""), want = Buffer.from(env.RELEASE_KEY ?? "");
+      if (!want.length || k.length !== want.length || !timingSafeEqual(k, want)) return send(res, 401, "unauthorized", "text/plain");
+      latestCache.at = 0;
+      (updating ?? Promise.resolve()).then(tick); // after any pass already running (it may have used the old version)
+      return send(res, 202, "updating", "text/plain");
     }
     const m = u.pathname.match(/^\/cloud\/instances\/([\w-]+)\/(restart|update|autoupdate|delete|tag|pages|domain|domain-remove|invite|uninvite)$/);
     if (req.method === "POST" && m) {
