@@ -50,7 +50,7 @@ async function render() {
 
 // Step 1: your site is hosted on Cloudflare Pages in your own account, so connect it first (once).
 function cloudflare(me) {
-  $app.innerHTML = `<p><b>1. Connect Cloudflare.</b> Your site is hosted on Cloudflare Pages in your own account: fast, a preview for every change, and your own domain. Open Cloudflare's token page, already filled in for Agent Keyboard. New to Cloudflare? Sign up there first; it's free.</p>
+  $app.innerHTML = `<p><b>1. Connect Cloudflare.</b> Your site is hosted on Cloudflare Pages in your own account: fast, a preview for every change, and your own domain, all on Cloudflare's free plan. Open Cloudflare's token page, already filled in for Agent Keyboard. New to Cloudflare? Sign up there first; it's free.</p>
     <div class="row"><a class="btn ghost" href="${esc(me.cloudflareTokenUrl)}" target="_blank" rel="noopener">Open Cloudflare</a></div>
     <p>Scroll down, click <b>Continue to summary</b>, then <b>Create token</b>. Copy the token and paste it here.</p>
     <form id="cff"><label for="cft">Cloudflare token</label><input id="cft" type="password" autocomplete="off" spellcheck="false" required>
