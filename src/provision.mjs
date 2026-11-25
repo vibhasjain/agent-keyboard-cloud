@@ -4,7 +4,7 @@
 
 import { randomBytes } from "node:crypto";
 import { mint, sprites } from "./fly.mjs";
-import { addDeployKey, createRepo, getRepo } from "./github.mjs";
+import { addDeployKey, createRepo, getRepo, isBlank, putFile } from "./github.mjs";
 
 const INSTALL_URL = "https://raw.githubusercontent.com/vibhasjain/agent-keyboard/{ref}/server/sprite-install.sh";
 const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
@@ -69,14 +69,16 @@ export async function provision(opts, progress = () => {}) {
   const { email, githubToken, supabase } = opts;
   const userToken = opts.userToken ?? githubToken; // creating a repo needs a user token
   const ref = opts.ref ?? "main";
-  const starter = !opts.repo;
+  let starter = !opts.repo; // starter: the Sprite hosts the site (a new repo, or a blank one the user picked)
 
   progress("fly: minting tokens");
   const api = sprites(await mint(opts.assertion));
 
   progress("github: checking the repo");
   let repo = starter ? null : await getRepo(githubToken, opts.repo);
-  const siteId = slug(starter ? opts.name ?? "my-site" : repo.name);
+  const blank = repo && (await isBlank(githubToken, repo.full_name));
+  if (blank) starter = true;
+  const siteId = slug(repo ? repo.name : opts.name ?? "my-site");
   const name = spriteName(siteId);
 
   progress("claude: finding the connector");
@@ -94,7 +96,11 @@ export async function provision(opts, progress = () => {}) {
   const domain = starter ? new URL(url).host : opts.domain ?? (homepage && new URL(homepage).host);
   if (!domain) throw new Error(`no domain for ${repo.full_name}: pass the site's host (the repo has no homepage)`);
 
-  if (starter) {
+  if (blank) {
+    progress("github: adding a starter page");
+    await putFile(githubToken, repo.full_name, "index.html", starterIndex(repo.name, scriptTag(url, siteId)), "Starter site: index.html");
+    repo = await getRepo(githubToken, repo.full_name); // an empty repo gets its default branch now
+  } else if (starter) {
     progress("github: creating the starter repo");
     const repoName = opts.name ?? "my-site";
     repo = await createRepo(userToken, repoName, "My site, built with Agent Keyboard", {

@@ -37,6 +37,16 @@ export async function createRepo(token, name, description, files) {
   return repo;
 }
 
+/** True when the repo has nothing but a README/LICENSE/.gitignore (or no commits): no site yet. */
+export async function isBlank(token, fullName) {
+  const files = await gh(token, "GET", `/repos/${fullName}/contents/`).catch((e) => (e.status === 404 ? [] : Promise.reject(e)));
+  return files.every((f) => /^(readme|license|copying|\.git)/i.test(f.name));
+}
+
+/** Add `path` to the repo's default branch (it must not exist yet). */
+export const putFile = (token, fullName, path, content, message) =>
+  gh(token, "PUT", `/repos/${fullName}/contents/${path}`, { message, content: Buffer.from(content).toString("base64") });
+
 /** Give the Sprite push access with its own public key (the private half never leaves it). */
 export async function addDeployKey(token, fullName, title, key) {
   try {
