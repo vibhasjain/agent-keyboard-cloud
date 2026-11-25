@@ -123,10 +123,10 @@ async function runProvision(flow, code) {
       { assertion: flow.assertion, email: flow.email, repo: flow.repo, domain: flow.domain, name: flow.name, ref: REF, githubToken: user.token, supabase, connector: connection },
       (d) => (flow.detail = d),
     );
-    upsert({ id: r.sprite, email: flow.email, login: flow.login, siteId: r.siteId, repo: r.repo, domain: r.domain, url: r.url, connection: r.connection, starter: r.starter, tag: r.tag, ref: REF, createdAt: new Date().toISOString(), assertion: seal(flow.assertion) });
-    flow.assertion = null;
     // A brought site gets the tag committed to its index.html; if there isn't one, the page shows it to paste.
     const tagPath = r.starter ? null : await addTag(user.token, r.repo, r.tag).catch(() => null);
+    upsert({ id: r.sprite, tagPath, email: flow.email, login: flow.login, siteId: r.siteId, repo: r.repo, domain: r.domain, url: r.url, connection: r.connection, starter: r.starter, tag: r.tag, ref: REF, createdAt: new Date().toISOString(), assertion: seal(flow.assertion) });
+    flow.assertion = null;
     step(flow, "done", { result: { url: r.url, tag: r.tag, starter: r.starter, repo: r.repo, tagPath } });
   } catch (e) {
     // Claude's login is single-use: drop the old link (the page waits) and start a fresh one.
@@ -302,7 +302,9 @@ createServer(async (req, res) => {
       if (m[2] === "tag") {
         const gu = ghUser(s.login);
         if (!gu || inst.starter) return send(res, gu ? 400 : 401, { error: gu ? "Starter sites already have the bar" : "Sign in with GitHub again" });
-        return send(res, 200, { ok: true, path: await addTag(gu.token, inst.repo, inst.tag) });
+        const path = await addTag(gu.token, inst.repo, inst.tag);
+        upsert({ ...inst, tagPath: path });
+        return send(res, 200, { ok: true, path });
       }
       await act(inst, m[2]);
       return send(res, 200, { ok: true });
