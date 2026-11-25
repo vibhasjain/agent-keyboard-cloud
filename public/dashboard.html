@@ -27,14 +27,14 @@ const LABEL = { restart: "Restarting…", update: "Updating… (about a minute)"
 async function render(note) {
   const me = await api("me").catch(() => ({}));
   if (!me.signedIn) {
-    $app.innerHTML = `<div class="card"><p>Sign in with the GitHub account you set up with.</p><a class="btn" href="/cloud/github/login?next=dashboard">Sign in with GitHub</a></div>`;
+    $app.innerHTML = `<div class="card"><p>Sign in with GitHub to set up Agent Keyboard or manage your instances.</p><a class="btn" href="/cloud/github/login?next=dashboard">Sign in with GitHub</a></div>`;
     return;
   }
   document.getElementById("who").innerHTML = `${esc(me.login)} · <a href="#" id="out">Sign out</a>`;
   document.getElementById("out").onclick = (e) => { e.preventDefault(); api("logout", {}).then(() => location.reload()); };
   let list;
   try { list = (await api("instances")).instances; } catch (e) { $app.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
-  if (!list.length) { $app.innerHTML = `<div class="card"><p>No instances yet.</p><a class="btn" href="/start">Get started</a></div>`; return; }
+  if (!list.length) return location.replace("/start");
   $app.innerHTML = `<p style="min-height:1.6em">${esc(note ?? "")}</p>` + list.map((i) => `
     <div class="card inst" data-id="${esc(i.id)}">
       <h2><span class="dot ${["running", "warm", "cold"].includes(i.status) ? "on" : ""}"></span>${esc(i.siteId)}</h2>
