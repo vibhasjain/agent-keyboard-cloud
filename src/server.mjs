@@ -240,13 +240,42 @@ async function addOrigin(inst, origin) {
 }
 
 // ---- dashboard actions ----
+const INSTALL = `curl -fsSL https://raw.githubusercontent.com/vibhasjain/agent-keyboard/${REF}/server/sprite-install.sh -o ~/sprite-install.sh && AK_REF=${REF} bash ~/sprite-install.sh`;
+// The version a Sprite runs = the last commits touching server/ and widget/ at REF (site/ changes don't count).
+async function latest() {
+  const shas = await Promise.all(["server", "widget"].map(async (path) => {
+    const r = await fetch(`https://api.github.com/repos/vibhasjain/agent-keyboard/commits?sha=${REF}&path=${path}&per_page=1`, { headers: { "User-Agent": "agent-keyboard-cloud" } });
+    if (!r.ok) throw new Error(`github ${r.status}`);
+    return (await r.json())[0].sha.slice(0, 7);
+  }));
+  return shas.join("+");
+}
+// Auto-update (on unless the owner turned it off): hourly, each Sprite behind the latest version reinstalls,
+// skipping any that is running a job (a Claude CLI turn) so nothing is cut off; it tries again next hour.
+async function autoUpdate() {
+  const version = await latest();
+  for (const inst of load().filter((i) => i.autoUpdate !== false && i.version !== version)) {
+    try {
+      const { out } = await sprites(await mint(open(inst.assertion))).exec(inst.id, `if cat /proc/[0-9]*/cmdline 2>/dev/null | tr '\\0' ' ' | grep -q 'output-forma[t] stream-json'; then echo AK_BUSY; else ${INSTALL}; fi`);
+      if (out.includes("AK_BUSY")) continue;
+      const cur = load().find((i) => i.id === inst.id);
+      if (cur) upsert({ ...cur, ref: REF, version });
+      console.log("autoupdate", inst.id, version);
+    } catch (e) { console.error("autoupdate", inst.id, e.message); }
+  }
+}
+const tick = () => autoUpdate().catch((e) => console.error("autoupdate", e.message));
+setTimeout(tick, 60e3).unref(); // also right after a deploy, so frequent deploys never starve it
+setInterval(tick, 3600e3).unref();
+
 async function act(inst, action) {
   const creds = await mint(open(inst.assertion));
   const api = sprites(creds);
   if (action === "restart") await api.exec(inst.id, "sprite-env services restart ak", { timeoutMs: 60e3 });
   else if (action === "update") {
-    await api.exec(inst.id, `curl -fsSL https://raw.githubusercontent.com/vibhasjain/agent-keyboard/${REF}/server/sprite-install.sh -o ~/sprite-install.sh && AK_REF=${REF} bash ~/sprite-install.sh`);
-    upsert({ ...inst, ref: REF });
+    const version = await latest().catch(() => null);
+    await api.exec(inst.id, INSTALL);
+    upsert({ ...(load().find((i) => i.id === inst.id) ?? inst), ref: REF, version });
   } else if (action === "delete") {
     await api.remove(inst.id).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
     await api.removeConnection(inst.connection).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
@@ -439,10 +468,14 @@ async function dispatch(req, res, u, s, b) {
       const token = d.hashed_token ?? d.properties?.hashed_token;
       return redirect(res, token ? `${site}/#ak_handoff=${encodeURIComponent(token)}` : site);
     }
-    const m = u.pathname.match(/^\/cloud\/instances\/([\w-]+)\/(restart|update|delete|tag|pages|domain|domain-remove)$/);
+    const m = u.pathname.match(/^\/cloud\/instances\/([\w-]+)\/(restart|update|autoupdate|delete|tag|pages|domain|domain-remove)$/);
     if (req.method === "POST" && m) {
       const inst = s && load().find((i) => i.id === m[1] && i.email === s.email);
       if (!inst) return send(res, 404, { error: "No such instance" });
+      if (m[2] === "autoupdate") {
+        upsert({ ...inst, autoUpdate: inst.autoUpdate === false });
+        return send(res, 200, { ok: true });
+      }
       if (m[2] === "tag") {
         const gu = ghUser(s.login);
         if (!gu || inst.starter) return send(res, gu ? 400 : 401, { error: gu ? "Starter sites already have the bar" : "Sign in with GitHub again" });

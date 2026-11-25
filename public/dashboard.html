@@ -22,7 +22,7 @@ const api = async (path, body) => {
   if (!r.ok) throw new Error(d.error || "Something went wrong (" + r.status + ")");
   return d;
 };
-const LABEL = { restart: "Restarting…", update: "Updating… (about a minute)", delete: "Deleting…", tag: "Adding…", pages: "Starting…", "domain-remove": "Removing…" };
+const LABEL = { restart: "Restarting…", update: "Updating… (about a minute)", delete: "Deleting…", autoupdate: "Saving…", tag: "Adding…", pages: "Starting…", "domain-remove": "Removing…" };
 let timer;
 
 // Cloudflare Pages hosting (spec #13): where the site is served, its previews and sandboxes.
@@ -68,13 +68,13 @@ async function render(note) {
   $app.innerHTML = `<p style="min-height:1.6em">${esc(note ?? "")}</p>` + (me.cloudflare ? "" : cfForm(me)) + list.map((i) => `
     <div class="card inst" data-id="${esc(i.id)}">
       <h2><span class="dot ${["running", "warm", "cold"].includes(i.status) ? "on" : ""}"></span>${esc(i.siteId)}</h2>
-      <div class="meta">Sprite <b>${esc(i.id)}</b> · ${esc(i.status)} · version ${esc(i.ref)} · since ${esc(i.createdAt.slice(0, 10))}</div>
+      <div class="meta">Sprite <b>${esc(i.id)}</b> · ${esc(i.status)} · version ${esc(i.version ?? i.ref)} · since ${esc(i.createdAt.slice(0, 10))}</div>
       <div class="meta">Repo <a href="https://github.com/${esc(i.repo)}" target="_blank" rel="noopener">${esc(i.repo)}</a> · site <a href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar">${esc(i.pages?.state === "live" ? (i.pages.staging ?? (i.customDomain?.status === "active" ? i.customDomain.host : i.pages.live)).replace("https://", "") : i.starter ? i.url : i.domain)}</a></div>
       ${i.staging ? `<div class="meta">Staged: the bar commits to <b>ak-staging</b> (this preview); tell it "deploy to live" to ship</div>` : ""}
       ${i.starter ? "" : i.tagPath ? `<div class="meta">Bar added to <b>${esc(i.tagPath)}</b></div>` : `<pre>${esc(i.tag)}</pre>`}
       ${hosting(i, me)}
       ${i.status === "reconnect Fly" ? `<p class="err">Our access to your Fly account expired or was revoked. Delete and set up again to reconnect.</p>` : ""}
-      <div class="row">${!me.cloudflare || i.pages?.state === "live" || i.pages?.state === "setting up" ? "" : `<button class="btn" data-a="pages">${i.pages?.state === "error" ? "Retry Cloudflare Pages" : "Host on Cloudflare Pages"}</button>`}${i.starter || i.tagPath ? "" : `<button class="btn ghost" data-a="tag" title="Commits the tag to your repo's index.html">Add the tag for me</button>`}<button class="btn ghost" data-a="restart">Restart</button><button class="btn ghost" data-a="update">Update</button><button class="btn ghost" data-a="delete">Delete</button></div>
+      <div class="row">${!me.cloudflare || i.pages?.state === "live" || i.pages?.state === "setting up" ? "" : `<button class="btn" data-a="pages">${i.pages?.state === "error" ? "Retry Cloudflare Pages" : "Host on Cloudflare Pages"}</button>`}${i.starter || i.tagPath ? "" : `<button class="btn ghost" data-a="tag" title="Commits the tag to your repo's index.html">Add the tag for me</button>`}<button class="btn ghost" data-a="restart">Restart</button><button class="btn ghost" data-a="update">Update</button><button class="btn ghost" data-a="autoupdate" aria-pressed="${i.autoUpdate !== false}" title="Installs each new Agent Keyboard release when no job is running">Auto-update: ${i.autoUpdate === false ? "off" : "on"}</button><button class="btn ghost" data-a="delete">Delete</button></div>
     </div>`).join("") + `<div class="row"><a class="btn ghost" href="/start">Add another site</a></div>${me.cloudflare ? `<p class="small">Cloudflare: connected (${esc(me.cloudflare)}) · <a href="#" id="cfre">Use a different token</a></p>` : ""}<div id="cfslot"></div><p class="small">Prefer Claude? Add our MCP server, <b>https://agentkeyboard.com/mcp</b>, as a custom connector in Claude (Settings → Connectors), or in Claude Code: <code>claude mcp add --transport http agent-keyboard https://agentkeyboard.com/mcp</code>. Claude can then set up and manage your sites too.</p>`;
   clearTimeout(timer);
   if (list.some((i) => i.pages?.state === "setting up")) timer = setTimeout(() => render(note), 3000);
@@ -119,7 +119,7 @@ async function render(note) {
     if (a === "delete" && !confirm(`Delete ${id}? This removes the Sprite and its Claude connector from your Fly account. Your repo stays.`)) return;
     b.closest(".row").querySelectorAll("button").forEach((x) => (x.disabled = true));
     b.textContent = LABEL[a];
-    try { const r = await api(`instances/${id}/${a}`, {}); render(a === "delete" ? `Deleted ${id}.` : a === "domain-remove" ? "Removed the domain." : a === "tag" ? `Added the tag to ${r.path}. Your host redeploys from that commit.` : `${id}: ${a} done.`); }
+    try { const r = await api(`instances/${id}/${a}`, {}); render(a === "delete" ? `Deleted ${id}.` : a === "domain-remove" ? "Removed the domain." : a === "tag" ? `Added the tag to ${r.path}. Your host redeploys from that commit.` : a === "autoupdate" ? `${id}: auto-update ${b.getAttribute("aria-pressed") === "true" ? "off" : "on"}.` : `${id}: ${a} done.`); }
     catch (e) { if (e.message === "Sign in with GitHub again") location.href = "/cloud/github/login?next=dashboard"; else render(e.message); }
   }));
 }
