@@ -39,10 +39,10 @@ async function render(note) {
     <div class="card inst" data-id="${esc(i.id)}">
       <h2><span class="dot ${["running", "warm", "cold"].includes(i.status) ? "on" : ""}"></span>${esc(i.siteId)}</h2>
       <div class="meta">Sprite <b>${esc(i.id)}</b> · ${esc(i.status)} · version ${esc(i.ref)} · since ${esc(i.createdAt.slice(0, 10))}</div>
-      <div class="meta">Repo <a href="https://github.com/${esc(i.repo)}" target="_blank" rel="noopener">${esc(i.repo)}</a> · ${i.starter ? `site <a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.url)}</a>` : `site <a href="https://${esc(i.domain)}" target="_blank" rel="noopener">${esc(i.domain)}</a>`}</div>
+      <div class="meta">Repo <a href="https://github.com/${esc(i.repo)}" target="_blank" rel="noopener">${esc(i.repo)}</a> · ${i.starter ? `site <a href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar">${esc(i.url)}</a>` : `site <a href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar">${esc(i.domain)}</a>`}</div>
       ${i.starter ? "" : `<pre>${esc(i.tag)}</pre>`}
       ${i.status === "reconnect Fly" ? `<p class="err">Our access to your Fly account expired or was revoked. Delete and set up again to reconnect.</p>` : ""}
-      <div class="row"><a class="btn" href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener">Open signed in</a><button class="btn ghost" data-a="restart">Restart</button><button class="btn ghost" data-a="update">Update</button><button class="btn ghost" data-a="delete">Delete</button></div>
+      <div class="row"><button class="btn ghost" data-a="restart">Restart</button><button class="btn ghost" data-a="update">Update</button><button class="btn ghost" data-a="delete">Delete</button></div>
     </div>`).join("");
   $app.querySelectorAll("button[data-a]").forEach((b) => (b.onclick = async () => {
     const id = b.closest(".inst").dataset.id, a = b.dataset.a;
