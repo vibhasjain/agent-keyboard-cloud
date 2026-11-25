@@ -15,7 +15,10 @@ p{ color:var(--ink-2); margin-bottom:14px; } .small{ font-size:13px; color:var(-
 .btn{ display:inline-flex; align-items:center; gap:8px; border:0; border-radius:999px; padding:11px 20px; cursor:pointer;
   font:600 15px var(--sans); background:var(--amber); color:#1a1208; } .btn:hover{ background:var(--amber-2); color:#1a1208; }
 .btn.ghost{ background:transparent; color:var(--ink-2); border:1px solid var(--rule-2); font-weight:500; } .btn.ghost:hover{ color:var(--amber); }
-.link{ border:0; background:none; padding:0; font:inherit; color:var(--amber); cursor:pointer; } .link:hover{ text-decoration:underline; } .link:disabled{ color:var(--ink-3); cursor:default; text-decoration:none; } .row.actions{ align-items:center; } .btn.primary{ margin-left:auto; }
+.link{ border:0; background:none; padding:0; font:inherit; color:var(--amber); cursor:pointer; } .link:hover{ text-decoration:underline; } .link:disabled{ color:var(--ink-3); cursor:default; text-decoration:none; } .row.actions:empty{ display:none; }
+.upd{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.team{ border-top:1px solid var(--rule-2); margin-top:18px; padding-top:16px; }
+.foot{ display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-top:16px; } .foot .more{ margin:0; } .foot .more[open]{ flex-basis:100%; } .foot .btn.primary{ margin-left:auto; }
 .btn:disabled{ opacity:.5; cursor:default; }
 label{ display:block; font-size:13px; font-weight:500; color:var(--ink-2); margin:14px 0 6px; }
 input,select{ width:100%; background:var(--bg); color:var(--ink); border:1px solid var(--rule-2); border-radius:10px; padding:11px 12px; font:16px var(--sans); }
