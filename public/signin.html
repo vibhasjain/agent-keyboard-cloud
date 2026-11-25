@@ -11,10 +11,14 @@
 <div class="wrap">
   <div class="top"><a class="brand" href="https://agentkeyboard.com"><img src="https://agentkeyboard.com/typewriter-mark.png" alt=""><b>Agent Keyboard</b></a></div>
   <h1>Sign in to Agent Keyboard</h1>
-  <div class="card"><p>Sign in with GitHub to set up Agent Keyboard or manage your instances.</p><a class="btn" href="/cloud/github/login?next=dashboard">Sign in with GitHub</a></div>
+  <div class="card"><p>Sign in with GitHub to set up Agent Keyboard or manage your instances.</p><a class="btn" id="go" href="/cloud/github/login?next=dashboard">Sign in with GitHub</a></div>
 </div>
 <script>
-fetch("/cloud/me").then((r) => r.json()).then((me) => { if (me.signedIn) location.replace("/dashboard"); }).catch(() => {});
+// ?next=start comes from /start: GitHub then walks a new user through installing the app.
+const next = new URLSearchParams(location.search).get("next") === "start" ? "start" : "dashboard";
+document.getElementById("go").href = "/cloud/github/login?next=" + next;
+// An expired GitHub sign-in (github: false) stays here to sign in again; otherwise /start would bounce back.
+fetch("/cloud/me").then((r) => r.json()).then((me) => { if (me.signedIn && me.github) location.replace("/" + next); }).catch(() => {});
 </script>
 <script src="https://agent-keyboard.fly.dev/widget.js" data-site="halo" data-accent="#ffb86b" data-theme="dark" data-summon="signed-out" defer></script>
 </body>
