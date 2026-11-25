@@ -117,7 +117,9 @@ async function runProvision(flow, code) {
     );
     upsert({ id: r.sprite, email: flow.email, login: flow.login, siteId: r.siteId, repo: r.repo, domain: r.domain, url: r.url, connection: r.connection, starter: r.starter, tag: r.tag, ref: REF, createdAt: new Date().toISOString(), assertion: seal(flow.assertion) });
     flow.assertion = null;
-    step(flow, "done", { result: { url: r.url, tag: r.tag, starter: r.starter, repo: r.repo } });
+    // A brought site gets the tag committed to its index.html; if there isn't one, the page shows it to paste.
+    const tagPath = r.starter ? null : await addTag(user.token, r.repo, r.tag).catch(() => null);
+    step(flow, "done", { result: { url: r.url, tag: r.tag, starter: r.starter, repo: r.repo, tagPath } });
   } catch (e) {
     // Claude's login is single-use: drop the old link (the page waits) and start a fresh one.
     if (flow.step === "connector") flow.loginUrl = null;
