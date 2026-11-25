@@ -68,7 +68,7 @@ export async function signIn(code) {
   const email = (emails.find((e) => e.primary && e.verified) ?? emails.find((e) => e.verified))?.email;
   if (!email) throw new Error("your GitHub account has no verified email");
   const installations = inst.installations.filter((i) => i.app_id === Number(app.id)).map((i) => i.id);
-  return { token, login: user.login, email: email.toLowerCase(), installations };
+  return { token, expiresIn: t.expires_in, login: user.login, email: email.toLowerCase(), installations };
 }
 
 /** Repos the user gave the App, as "owner/name" with homepage. */

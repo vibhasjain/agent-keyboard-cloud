@@ -62,7 +62,12 @@ function setSession(res, s) {
   const v = Buffer.from(JSON.stringify({ ...s, exp: Date.now() + 7 * 864e5 })).toString("base64url");
   res.setHeader("Set-Cookie", `akc=${v}.${mac(v)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800${secure}`);
 }
-const users = new Map(); // login → { token, installations }  (GitHub user token, in memory only)
+// login → { token, installations, exp }: GitHub user tokens, sealed on the volume so deploys don't sign people out.
+const USERS = `${DATA}/users.json`;
+let users;
+try { users = new Map(Object.entries(existsSync(USERS) ? JSON.parse(open(readFileSync(USERS, "utf8"))) : {})); } catch { users = new Map(); }
+const saveUsers = () => writeFileSync(USERS, seal(JSON.stringify(Object.fromEntries(users))), { mode: 0o600 });
+const ghUser = (login) => { const u = users.get(login); return u && u.exp > Date.now() ? u : null; };
 const flows = new Map(); // email → the start flow in progress
 const states = new Map(); // oauth state → "start" | "dashboard"
 
@@ -112,7 +117,7 @@ async function runProvision(flow, code) {
     const connection = await claudeLoginFinish(sprites(creds), flow.sprite, code, creds);
     flow.loginUrl = null;
     step(flow, "install");
-    const user = users.get(flow.login);
+    const user = ghUser(flow.login);
     if (!user) throw new Error("Your GitHub sign-in expired. Sign in again.");
     const r = await provision(
       { assertion: flow.assertion, email: flow.email, repo: flow.repo, domain: flow.domain, name: flow.name, ref: REF, githubToken: user.token, supabase, connector: connection },
@@ -205,7 +210,8 @@ const routes = {
     states.delete(q.get("state"));
     if (!q.get("code")) return redirect(res, `/${next}`);
     const u = await signIn(q.get("code"));
-    users.set(u.login, { token: u.token, installations: u.installations });
+    users.set(u.login, { token: u.token, installations: u.installations, exp: Date.now() + (u.expiresIn ?? 8 * 3600) * 1000 - 60e3 });
+    saveUsers();
     setSession(res, { login: u.login, email: u.email });
     if (next === "start" && !u.installations.length) {
       const state = randomBytes(16).toString("hex");
@@ -214,7 +220,8 @@ const routes = {
     }
     redirect(res, `/${next}`);
   },
-  "POST /cloud/logout": (q, req, res) => {
+  "POST /cloud/logout": (q, req, res, s) => {
+    if (s && users.delete(s.login)) saveUsers();
     res.setHeader("Set-Cookie", `akc=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`);
     send(res, 200, { ok: true });
   },
@@ -222,15 +229,15 @@ const routes = {
   "GET /cloud/me": (q, req, res, s) => {
     if (!s) return send(res, 200, { signedIn: false, app: appReady() });
     const inst = load().find((i) => i.email === s.email);
-    send(res, 200, { signedIn: true, login: s.login, email: s.email, github: users.has(s.login), installUrl: appReady() ? installUrl("start") : null, instance: inst && pub(inst), flow: flowView(flows.get(s.email)) });
+    send(res, 200, { signedIn: true, login: s.login, email: s.email, github: !!ghUser(s.login), installUrl: appReady() ? installUrl("start") : null, instance: inst && pub(inst), flow: flowView(flows.get(s.email)) });
   },
   "GET /cloud/repos": async (q, req, res, s) => {
-    const u = s && users.get(s.login);
+    const u = s && ghUser(s.login);
     if (!u) return send(res, 401, { error: "Sign in with GitHub again" });
     send(res, 200, { repos: await userRepos(u.token, u.installations) });
   },
   "POST /cloud/start": async (q, req, res, s, b) => {
-    const u = s && users.get(s.login);
+    const u = s && ghUser(s.login);
     if (!u) return send(res, 401, { error: "Sign in with GitHub again" });
     const f = flows.get(s.email);
     if (f && !["error", "done"].includes(f.step)) return send(res, 200, flowView(f));
@@ -293,7 +300,7 @@ createServer(async (req, res) => {
       const inst = s && load().find((i) => i.id === m[1] && i.email === s.email);
       if (!inst) return send(res, 404, { error: "No such instance" });
       if (m[2] === "tag") {
-        const gu = users.get(s.login);
+        const gu = ghUser(s.login);
         if (!gu || inst.starter) return send(res, gu ? 400 : 401, { error: gu ? "Starter sites already have the bar" : "Sign in with GitHub again" });
         return send(res, 200, { ok: true, path: await addTag(gu.token, inst.repo, inst.tag) });
       }
