@@ -81,16 +81,19 @@ function step(flow, s, extra = {}) {
 
 async function runFly(flow) {
   try {
-    const reg = await register(flow.email);
-    step(flow, "fly", { userCode: reg.claim.user_code, verifyUrl: reg.claim.verification_uri_complete ?? reg.claim.verification_uri });
-    const until = Date.now() + (reg.claim.expires_in ?? 600) * 1000;
-    let creds = null;
+    // Another instance's Fly access still works: reuse it and skip the code.
+    const prev = load().find((i) => i.email === flow.email);
+    const prevAssertion = prev && open(prev.assertion);
+    let creds = prev ? await mint(prevAssertion).catch(() => null) : null;
+    const reg = creds ? null : await register(flow.email);
+    if (reg) step(flow, "fly", { userCode: reg.claim.user_code, verifyUrl: reg.claim.verification_uri_complete ?? reg.claim.verification_uri });
+    const until = Date.now() + (reg?.claim.expires_in ?? 600) * 1000;
     while (!creds) {
       if (Date.now() > until) throw new Error("The Fly code expired. Start again.");
       await new Promise((r) => setTimeout(r, Math.max(5, reg.claim.interval ?? 5) * 1000));
       creds = await pollClaim(reg.claim_token);
     }
-    flow.assertion = creds.identity_assertion;
+    flow.assertion = creds.identity_assertion ?? prevAssertion;
     step(flow, "sprite", { detail: `creating ${flow.sprite}` });
     const api = sprites(creds);
     flow.url = await ensureSprite(api, flow.sprite);
@@ -229,7 +232,6 @@ const routes = {
   "POST /cloud/start": async (q, req, res, s, b) => {
     const u = s && users.get(s.login);
     if (!u) return send(res, 401, { error: "Sign in with GitHub again" });
-    if (load().some((i) => i.email === s.email)) return send(res, 409, { error: "You already have an instance. Manage it from the dashboard." });
     const f = flows.get(s.email);
     if (f && !["error", "done"].includes(f.step)) return send(res, 200, flowView(f));
     if (limited(req.headers["x-nf-client-connection-ip"] ?? req.headers["fly-client-ip"] ?? req.socket.remoteAddress)) return send(res, 429, { error: "Too many attempts. Try again in an hour." });
@@ -243,6 +245,7 @@ const routes = {
       name = slug(String(b.name ?? "my-site"));
     }
     const flow = { email: s.email, login: s.login, repo, domain, name, sprite: spriteName(slug(repo ? repo.split("/")[1] : name)) };
+    if (load().some((i) => i.id === flow.sprite)) return send(res, 409, { error: `You already have ${flow.sprite}. Manage it from the dashboard, or pick another repo or name.` });
     step(flow, "fly", { detail: "registering with Fly" });
     flows.set(s.email, flow);
     runFly(flow);

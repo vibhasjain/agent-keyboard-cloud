@@ -43,7 +43,7 @@ async function render(note) {
       ${i.starter ? "" : `<pre>${esc(i.tag)}</pre>`}
       ${i.status === "reconnect Fly" ? `<p class="err">Our access to your Fly account expired or was revoked. Delete and set up again to reconnect.</p>` : ""}
       <div class="row">${i.starter ? "" : `<button class="btn ghost" data-a="tag" title="Commits the tag to your repo's index.html">Add the tag for me</button>`}<button class="btn ghost" data-a="restart">Restart</button><button class="btn ghost" data-a="update">Update</button><button class="btn ghost" data-a="delete">Delete</button></div>
-    </div>`).join("");
+    </div>`).join("") + `<a class="btn ghost" href="/start">Add another site</a>`;
   $app.querySelectorAll("button[data-a]").forEach((b) => (b.onclick = async () => {
     const id = b.closest(".inst").dataset.id, a = b.dataset.a;
     if (a === "delete" && !confirm(`Delete ${id}? This removes the Sprite and its Claude connector from your Fly account. Your repo stays.`)) return;

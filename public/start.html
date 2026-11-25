@@ -33,18 +33,15 @@ async function render() {
   clearTimeout(timer);
   let me;
   try { me = await api("me"); } catch (e) { $app.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
-  // An instance only needs the session cookie; the GitHub token (memory only) is lost on restarts.
-  if (me.instance) {
-    $app.innerHTML = `<p>You already have an instance: <a href="/cloud/open/${esc(me.instance.id)}" target="_blank" rel="noopener">${esc(me.instance.url)}</a>.</p><a class="btn" href="/dashboard">Open the dashboard</a>`;
-    return;
-  }
+  // Returning users with instances get a way to the dashboard; anyone can add another site.
+  if (me.instance && !document.getElementById("dash")) document.querySelector(".top").insertAdjacentHTML("beforeend", `<a id="dash" href="/dashboard">Dashboard</a>`);
   if (!me.signedIn || !me.github) {
     $app.innerHTML = `<p><b>1. Sign in with GitHub.</b> You'll install the Agent Keyboard app on your site's repo (or on nothing, if you don't have a site yet).</p>
       ${me.app === false ? `<p class="err">Sign-up isn't open yet.</p>` : `<a class="btn" href="/cloud/github/login?next=start">Sign in with GitHub</a>`}`;
     return;
   }
   const f = me.flow;
-  if (!f || f.step === "error" && lastStep === undefined) return pick(me, f?.error);
+  if (!f || ["error", "done"].includes(f.step) && lastStep === undefined) return pick(me, f?.step === "error" ? f.error : null);
   show(f);
 }
 
