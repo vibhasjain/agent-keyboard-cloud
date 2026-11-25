@@ -17,8 +17,6 @@
 // ?next=start comes from /start: GitHub then walks a new user through installing the app.
 const next = new URLSearchParams(location.search).get("next") === "start" ? "start" : "dashboard";
 document.getElementById("go").href = "/cloud/github/login?next=" + next;
-// An expired GitHub sign-in (github: false) stays here to sign in again; otherwise /start would bounce back.
-fetch("/cloud/me").then((r) => r.json()).then((me) => { if (me.signedIn && me.github) location.replace("/" + next); }).catch(() => {});
 </script>
 <script src="https://agent-keyboard.fly.dev/widget.js" data-site="halo" data-accent="#ffb86b" data-theme="dark" data-summon="signed-out" defer></script>
 </body>

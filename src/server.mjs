@@ -179,9 +179,20 @@ async function body(req) {
 
 const routes = {
   "GET /": (q, req, res) => redirect(res, "/start"),
-  "GET /start": (q, req, res) => send(res, 200, readFileSync(new URL("start.html", PAGES)), "text/html; charset=utf-8"),
-  "GET /dashboard": (q, req, res) => send(res, 200, readFileSync(new URL("dashboard.html", PAGES)), "text/html; charset=utf-8"),
-  "GET /signin": (q, req, res) => send(res, 200, readFileSync(new URL("signin.html", PAGES)), "text/html; charset=utf-8"),
+  // Sign-in redirects happen here, before the page renders, so there's no flash of the wrong page.
+  "GET /start": (q, req, res, s) => {
+    if (appReady() && !(s && ghUser(s.login))) return redirect(res, "/signin?next=start");
+    send(res, 200, readFileSync(new URL("start.html", PAGES)), "text/html; charset=utf-8");
+  },
+  "GET /dashboard": (q, req, res, s) => {
+    if (!s) return redirect(res, "/signin");
+    if (!load().some((i) => i.email === s.email)) return redirect(res, "/start");
+    send(res, 200, readFileSync(new URL("dashboard.html", PAGES)), "text/html; charset=utf-8");
+  },
+  "GET /signin": (q, req, res, s) => {
+    if (s && ghUser(s.login)) return redirect(res, q.get("next") === "start" ? "/start" : "/dashboard");
+    send(res, 200, readFileSync(new URL("signin.html", PAGES)), "text/html; charset=utf-8");
+  },
   "GET /cloud/cloud.css": (q, req, res) => send(res, 200, readFileSync(new URL("cloud.css", PAGES)), "text/css"),
   "GET /cloud/health": (q, req, res) => send(res, 200, { ok: true, app: appReady() }),
 
