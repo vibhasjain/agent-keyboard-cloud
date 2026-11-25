@@ -370,7 +370,8 @@ createServer(async (req, res) => {
     if (req.method === "GET" && o) {
       const inst = s && load().find((i) => i.id === o[1] && i.email === s.email);
       if (!inst) return redirect(res, "/dashboard");
-      const site = inst.starter ? inst.url : `https://${inst.domain}`;
+      const pg = inst.pages?.state === "live" && inst.pages;
+      const site = pg ? pg.staging ?? pg.live : inst.starter ? inst.url : `https://${inst.domain}`;
       const r = await fetch(`${supabase.url}/auth/v1/admin/generate_link`, {
         method: "POST",
         headers: { apikey: supabase.serviceKey, Authorization: `Bearer ${supabase.serviceKey}`, "Content-Type": "application/json" },

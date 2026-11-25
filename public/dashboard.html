@@ -28,7 +28,7 @@ let timer;
 // Cloudflare Pages hosting (spec #13): where the site is served, its previews and sandboxes.
 function hosting(i, me) {
   const p = i.pages ?? {};
-  if (p.state === "live") return `<div class="meta">Hosted on Cloudflare Pages: <a href="${esc(p.live)}" target="_blank" rel="noopener">${esc(p.live.replace("https://", ""))}</a>${p.staging ? ` · staging <a href="${esc(p.staging)}" target="_blank" rel="noopener">${esc(p.staging.replace("https://", ""))}</a>` : ""} · sandboxes on. Each push deploys in about a minute.</div>`;
+  if (p.state === "live") return `<div class="meta">Hosted on Cloudflare Pages${p.staging ? ` · live <a href="${esc(p.live)}" target="_blank" rel="noopener">${esc(p.live.replace("https://", ""))}</a>` : ""} · sandboxes on. Each push deploys in about a minute.</div>`;
   if (p.state === "setting up") return `<div class="meta">Cloudflare Pages: ${esc(p.detail || "setting up")}…</div>`;
   const err = p.state === "error" ? `<p class="err">${esc(p.error)}</p>${p.permsUrl ? `<div class="row"><a class="btn ghost" href="${esc(p.permsUrl)}" target="_blank" rel="noopener">Review permissions on GitHub</a></div>` : ""}` : "";
   if (me.cloudflare) return `${err}<div class="meta">Serve it from Cloudflare Pages (${esc(me.cloudflare)}): fast even when the Sprite sleeps, a preview for every branch, and sandboxes.</div>`;
@@ -56,7 +56,7 @@ async function render(note) {
     <div class="card inst" data-id="${esc(i.id)}">
       <h2><span class="dot ${["running", "warm", "cold"].includes(i.status) ? "on" : ""}"></span>${esc(i.siteId)}</h2>
       <div class="meta">Sprite <b>${esc(i.id)}</b> · ${esc(i.status)} · version ${esc(i.ref)} · since ${esc(i.createdAt.slice(0, 10))}</div>
-      <div class="meta">Repo <a href="https://github.com/${esc(i.repo)}" target="_blank" rel="noopener">${esc(i.repo)}</a> · ${i.starter ? `site <a href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar">${esc(i.url)}</a>` : `site <a href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar">${esc(i.domain)}</a>`}</div>
+      <div class="meta">Repo <a href="https://github.com/${esc(i.repo)}" target="_blank" rel="noopener">${esc(i.repo)}</a> · site <a href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar">${esc(i.pages?.state === "live" ? (i.pages.staging ?? i.pages.live).replace("https://", "") : i.starter ? i.url : i.domain)}</a></div>
       ${i.staging ? `<div class="meta">Staged: the bar commits to <b>ak-staging</b> (this preview); tell it "deploy to live" to ship</div>` : ""}
       ${i.starter ? "" : i.tagPath ? `<div class="meta">Bar added to <b>${esc(i.tagPath)}</b></div>` : `<pre>${esc(i.tag)}</pre>`}
       ${hosting(i, me)}
