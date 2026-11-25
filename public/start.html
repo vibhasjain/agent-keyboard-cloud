@@ -39,7 +39,7 @@ async function render() {
     return;
   }
   if (me.instance) {
-    $app.innerHTML = `<p>You already have an instance: <a href="${esc(me.instance.url)}">${esc(me.instance.url)}</a>.</p><a class="btn" href="/dashboard">Open the dashboard</a>`;
+    $app.innerHTML = `<p>You already have an instance: <a href="/cloud/open/${esc(me.instance.id)}" target="_blank" rel="noopener">${esc(me.instance.url)}</a>.</p><a class="btn" href="/dashboard">Open the dashboard</a>`;
     return;
   }
   const f = me.flow;
@@ -85,7 +85,9 @@ function show(f) {
   }
   if (f.step === "fly" && f.userCode) {
     $app.innerHTML = `<p><b>2. Connect Fly.io.</b> Open Fly and enter this code. If you don't have a Fly account yet, you'll make one there. This page continues by itself.</p>
-      <div class="code">${esc(f.userCode)}</div><a class="btn" href="${esc(f.verifyUrl)}" target="_blank" rel="noopener">Open fly.io</a>${steps(f.step)}`;
+      <div class="code">${esc(f.userCode)}</div><div class="row"><button class="btn ghost" id="copy">Copy code</button><a class="btn" href="${esc(f.verifyUrl)}" target="_blank" rel="noopener">Open fly.io</a></div>${steps(f.step)}`;
+    const c = document.getElementById("copy");
+    c.onclick = () => navigator.clipboard.writeText(f.userCode).then(() => (c.textContent = "Copied"));
   } else if (f.step === "claude") {
     $app.innerHTML = `<p><b>3. Sign in to Claude.</b> Approve on claude.ai, then paste the code it shows you here. The token goes into a connector in your own Fly account.</p>
       ${f.error ? `<p class="err">${esc(f.error)}</p>` : ""}
@@ -105,8 +107,9 @@ function show(f) {
   } else if (f.step === "done") {
     const r = f.result;
     $app.innerHTML = r.starter
-      ? `<p><b>Done.</b> Your site is live with the bar on it, at <a href="${esc(r.url)}">${esc(r.url)}</a>. Check your email for a link to set the bar's password, then tap the bar and tell it what to build.</p><a class="btn" href="${esc(r.url)}">Open your site</a>${steps("done")}`
-      : `<p><b>Done.</b> Add this tag to your site's pages (before <code>&lt;/body&gt;</code>), then push. Check your email for a link to set the bar's password.</p><pre>${esc(r.tag)}</pre>
+      ? `<p><b>Done.</b> Your site is live with the bar on it, at <a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url)}</a>. Open it from here and you're already signed in to the bar: tap it and tell it what to build.</p>
+         <div class="row"><a class="btn" href="/cloud/open/${esc(f.sprite)}" target="_blank" rel="noopener">Open your site</a><a class="btn ghost" href="/dashboard">Dashboard</a></div>${steps("done")}`
+      : `<p><b>Done.</b> Add this tag to your site's pages (before <code>&lt;/body&gt;</code>), then push. Once it's live, open your site from the dashboard and you're signed in to the bar.</p><pre>${esc(r.tag)}</pre>
          <div class="row"><button class="btn" id="copy">Copy</button><a class="btn ghost" href="/dashboard">Dashboard</a></div>${steps("done")}`;
     const c = document.getElementById("copy");
     if (c) c.onclick = () => navigator.clipboard.writeText(r.tag).then(() => (c.textContent = "Copied"));

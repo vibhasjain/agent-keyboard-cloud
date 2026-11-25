@@ -264,6 +264,22 @@ createServer(async (req, res) => {
   const u = new URL(req.url, BASE);
   const s = session(req);
   try {
+    // Open the site already signed in to the bar: a single-use magic-link token the widget
+    // redeems from #ak_handoff= (the same handoff sandboxes use).
+    const o = u.pathname.match(/^\/cloud\/open\/([\w-]+)$/);
+    if (req.method === "GET" && o) {
+      const inst = s && load().find((i) => i.id === o[1] && i.email === s.email);
+      if (!inst) return redirect(res, "/dashboard");
+      const site = inst.starter ? inst.url : `https://${inst.domain}`;
+      const r = await fetch(`${supabase.url}/auth/v1/admin/generate_link`, {
+        method: "POST",
+        headers: { apikey: supabase.serviceKey, Authorization: `Bearer ${supabase.serviceKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "magiclink", email: inst.email }),
+      }).catch(() => null);
+      const d = (await r?.json().catch(() => null)) ?? {};
+      const token = d.hashed_token ?? d.properties?.hashed_token;
+      return redirect(res, token ? `${site}/#ak_handoff=${encodeURIComponent(token)}` : site);
+    }
     const m = u.pathname.match(/^\/cloud\/instances\/([\w-]+)\/(restart|update|delete)$/);
     if (req.method === "POST" && m) {
       await body(req);
