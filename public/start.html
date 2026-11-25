@@ -25,8 +25,8 @@ const api = async (path, body) => {
   if (!r.ok) throw new Error(d.error || "Something went wrong (" + r.status + ")");
   return d;
 };
-const STEPS = [["cloudflare", "Connect Cloudflare"], ["fly", "Connect Fly.io"], ["claude", "Sign in to Claude"], ["install", "Install Agent Keyboard"], ["done", "Done"]];
-const order = { cloudflare: 0, fly: 1, sprite: 1, claude: 2, connector: 3, install: 3, done: 4 };
+const STEPS = [["cloudflare", "Connect Cloudflare"], ["site", "Pick your site"], ["fly", "Connect Fly.io"], ["claude", "Sign in to Claude"], ["install", "Install Agent Keyboard"], ["done", "Done"]];
+const order = { cloudflare: 0, site: 1, fly: 2, sprite: 2, claude: 3, connector: 4, install: 4, done: 5 };
 const steps = (s) => `<ol class="steps">${STEPS.map(([k, t], i) => `<li class="${i < order[s] || s === "done" ? "ok" : i === order[s] ? "now" : ""}">${t}</li>`).join("")}</ol>`;
 let timer, lastStep, copied = "";
 
@@ -82,7 +82,7 @@ async function pick(me, error) {
       <div id="none" hidden><label for="name">Name for your new site</label><input id="name" value="my-site" autocomplete="off">
         <p class="small">We'll create the repo on your GitHub with a starter page, hosted on Cloudflare Pages.</p></div>
       <div class="row"><button class="btn">Continue</button></div>
-    </form>${steps("fly")}`;
+    </form>${steps("site")}`;
   const sel = document.getElementById("repo"), dom = document.getElementById("domain");
   const sync = () => {
     document.getElementById("has").hidden = !sel.value;
