@@ -133,7 +133,11 @@ async function runProvision(flow, code) {
     const tagPath = r.starter || r.staging ? r.tagPath : await addTag(user.token, r.repo, r.tag).catch(() => null);
     upsert({ id: r.sprite, tagPath, email: flow.email, login: flow.login, siteId: r.siteId, repo: r.repo, domain: r.domain, url: r.url, connection: r.connection, starter: r.starter, staging: r.staging, tag: r.tag, ref: REF, createdAt: new Date().toISOString(), assertion: seal(flow.assertion) });
     flow.assertion = null;
-    step(flow, "done", { result: { url: r.url, tag: r.tag, starter: r.starter, staging: r.staging, repo: r.repo, tagPath } });
+    // Every site is hosted on Cloudflare Pages (connected before the flow starts).
+    flow.detail = "hosting your site on Cloudflare Pages";
+    await setupPages(r.sprite, user.token, cfs.get(flow.email));
+    const pages = load().find((i) => i.id === r.sprite)?.pages ?? {};
+    step(flow, "done", { result: { url: pages.staging ?? pages.live ?? r.url, pagesError: pages.state === "error" ? pages.error : null, tag: r.tag, starter: r.starter, staging: r.staging, repo: r.repo, tagPath } });
   } catch (e) {
     // Claude's login is single-use: drop the old link (the page waits) and start a fresh one.
     if (flow.step === "connector") flow.loginUrl = null;
@@ -353,6 +357,7 @@ const routes = {
   "POST /cloud/start": async (q, req, res, s, b) => {
     const u = s && ghUser(s.login);
     if (!u) return send(res, 401, { error: "Sign in with GitHub again" });
+    if (!cfs.get(s.email)) return send(res, 400, { error: "Connect Cloudflare first" });
     const f = flows.get(s.email);
     if (f && !["error", "done"].includes(f.step)) return send(res, 200, flowView(f));
     if (limited(req.headers["x-nf-client-connection-ip"] ?? req.headers["fly-client-ip"] ?? req.socket.remoteAddress)) return send(res, 429, { error: "Too many attempts. Try again in an hour." });
@@ -390,6 +395,11 @@ const routes = {
     const a = await verify(token);
     cfs.set(s.email, { token: seal(token), ...a });
     saveCfs();
+    const gu = ghUser(s.login);
+    if (gu) for (const i of load().filter((i) => i.email === s.email && !["live", "setting up"].includes(i.pages?.state))) {
+      upsert({ ...i, pages: { ...i.pages, state: "setting up", detail: "starting", error: null, permsUrl: null } });
+      setupPages(i.id, gu.token, cfs.get(s.email));
+    }
     send(res, 200, { accountName: a.accountName });
   },
 

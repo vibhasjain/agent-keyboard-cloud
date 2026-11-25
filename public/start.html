@@ -11,9 +11,9 @@
 <div class="wrap">
   <div class="top"><a class="brand" href="https://agentkeyboard.com"><img src="https://agentkeyboard.com/typewriter-mark.png" alt=""><b>Agent Keyboard</b></a></div>
   <h1>Your own <em>Agent Keyboard</em>, running on a Fly.io Sprite.</h1>
-  <p>Four steps, no terminal. Everything runs in <b>your</b> Fly account with <b>your</b> Claude subscription. We only set it up.</p>
+  <p>Five steps, no terminal. Everything runs in <b>your</b> Fly and Cloudflare accounts with <b>your</b> Claude subscription. We only set it up.</p>
   <div id="app" class="card" aria-live="polite"><p>Loading…</p></div>
-  <p class="small">What we keep: your GitHub email and login, the repo you pick, and an encrypted Fly credential that lets the dashboard restart, update or delete your Sprite. You can revoke it any time in your Fly dashboard under Tokens ("Agent (auth.md)"). Your Claude token goes into a connector in your Fly account and never reaches us. A light instance costs about $1/month on Fly. New Fly accounts get $1 of credit for 7 days, then need a card.</p>
+  <p class="small">What we keep: your GitHub email and login, the repo you pick, and an encrypted Fly credential that lets the dashboard restart, update or delete your Sprite. You can revoke it any time in your Fly dashboard under Tokens ("Agent (auth.md)"). Your Cloudflare token goes into your repo's GitHub Actions secrets (and is kept encrypted here to set up your other sites); revoke it any time on Cloudflare's token page. Your Claude token goes into a connector in your Fly account and never reaches us. A light instance costs about $1/month on Fly. New Fly accounts get $1 of credit for 7 days, then need a card.</p>
 </div>
 <script>
 const $app = document.getElementById("app");
@@ -24,8 +24,8 @@ const api = async (path, body) => {
   if (!r.ok) throw new Error(d.error || "Something went wrong (" + r.status + ")");
   return d;
 };
-const STEPS = [["fly", "Connect Fly.io"], ["claude", "Sign in to Claude"], ["install", "Install Agent Keyboard"], ["done", "Done"]];
-const order = { fly: 0, sprite: 0, claude: 1, connector: 2, install: 2, done: 3 };
+const STEPS = [["cloudflare", "Connect Cloudflare"], ["fly", "Connect Fly.io"], ["claude", "Sign in to Claude"], ["install", "Install Agent Keyboard"], ["done", "Done"]];
+const order = { cloudflare: 0, fly: 1, sprite: 1, claude: 2, connector: 3, install: 3, done: 4 };
 const steps = (s) => `<ol class="steps">${STEPS.map(([k, t], i) => `<li class="${i < order[s] || s === "done" ? "ok" : i === order[s] ? "now" : ""}">${t}</li>`).join("")}</ol>`;
 let timer, lastStep, copied = "";
 
@@ -41,23 +41,40 @@ async function render() {
     return;
   }
   const f = me.flow;
-  if (!f || ["error", "done"].includes(f.step) && lastStep === undefined) return pick(me, f?.step === "error" ? f.error : null);
+  const idle = !f || ["error", "done"].includes(f.step) && lastStep === undefined;
+  if (idle && !me.cloudflare) return cloudflare(me);
+  if (idle) return pick(me, f?.step === "error" ? f.error : null);
   show(f);
+}
+
+// Step 1: your site is hosted on Cloudflare Pages in your own account, so connect it first (once).
+function cloudflare(me) {
+  $app.innerHTML = `<p><b>1. Connect Cloudflare.</b> Your site is hosted on Cloudflare Pages in your own account: fast, a preview for every change, and your own domain. Open Cloudflare's token page, already filled in for Agent Keyboard. New to Cloudflare? Sign up there first; it's free.</p>
+    <div class="row"><a class="btn ghost" href="${esc(me.cloudflareTokenUrl)}" target="_blank" rel="noopener">Open Cloudflare</a></div>
+    <p>Scroll down, click <b>Continue to summary</b>, then <b>Create token</b>. Copy the token and paste it here.</p>
+    <form id="cff"><label for="cft">Cloudflare token</label><input id="cft" type="password" autocomplete="off" spellcheck="false" required>
+    <div class="row"><button class="btn">Connect</button></div></form>${steps("cloudflare")}`;
+  document.getElementById("cff").onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = e.submitter; btn.disabled = true; btn.textContent = "Checking…";
+    try { await api("cloudflare", { token: document.getElementById("cft").value }); render(); }
+    catch (err) { btn.disabled = false; btn.textContent = "Connect"; e.target.querySelector(".err")?.remove(); e.target.insertAdjacentHTML("afterbegin", `<p class="err">${esc(err.message)}</p>`); }
+  };
 }
 
 async function pick(me, error) {
   let repos = [];
   try { repos = (await api("repos")).repos; } catch (e) { error = e.message; }
-  $app.innerHTML = `<p>Signed in as <b>${esc(me.login)}</b> (${esc(me.email)}).</p>
+  $app.innerHTML = `<p><b>2. Pick your site.</b> Signed in as <b>${esc(me.login)}</b> (${esc(me.email)}), Cloudflare connected (${esc(me.cloudflare)}).</p>
     ${error ? `<p class="err">${esc(error)}</p>` : ""}
     <form id="f">
       <label for="repo">Your site's repo</label>
       <select id="repo">${repos.map((r) => `<option value="${esc(r.full_name)}" data-home="${esc(r.homepage)}">${esc(r.full_name)}</option>`).join("")}<option value="">I don't have a site yet</option></select>
       <p class="small">Missing a repo? <a href="${esc(me.installUrl)}">Give Agent Keyboard access to it</a>.</p>
       <div id="has"><label for="domain">Its live domain (optional)</label><input id="domain" placeholder="example.com" autocomplete="off">
-        <p class="small">Leave it blank to stage: your Sprite previews every change on its own link, and the bar ships to your live site when you tell it to. With a domain, changes go live right away.</p></div>
+        <p class="small">Leave it blank to stage: every change gets its own preview link on Cloudflare Pages, and the bar ships to your live site when you tell it to. With a domain, changes go live right away.</p></div>
       <div id="none" hidden><label for="name">Name for your new site</label><input id="name" value="my-site" autocomplete="off">
-        <p class="small">We'll create the repo on your GitHub with a starter page, and your Sprite will host it.</p></div>
+        <p class="small">We'll create the repo on your GitHub with a starter page, hosted on Cloudflare Pages.</p></div>
       <div class="row"><button class="btn">Continue</button></div>
     </form>${steps("fly")}`;
   const sel = document.getElementById("repo"), dom = document.getElementById("domain");
@@ -82,7 +99,7 @@ function show(f) {
     return;
   }
   if (f.step === "fly" && f.userCode) {
-    $app.innerHTML = `<p><b>2. Connect Fly.io.</b> The button copies this code and opens Fly: sign in there, then paste it when Fly asks. If you don't have a Fly account yet, you'll make one there. This page continues by itself.</p>
+    $app.innerHTML = `<p><b>3. Connect Fly.io.</b> The button copies this code and opens Fly: sign in there, then paste it when Fly asks. If you don't have a Fly account yet, you'll make one there. This page continues by itself.</p>
       <div class="code">${esc(f.userCode)}</div><div class="row"><a class="btn" id="open" href="${esc(f.verifyUrl)}" target="_blank" rel="noopener">Copy code &amp; open Fly.io</a></div><p class="small" id="copied" role="status">${esc(copied)}</p>${steps(f.step)}`;
     document.getElementById("open").onclick = () =>
       navigator.clipboard.writeText(f.userCode).then(
@@ -90,7 +107,7 @@ function show(f) {
         () => (document.getElementById("copied").textContent = copied = `Couldn't copy automatically. Type ${f.userCode} on Fly when it asks for the code.`),
       );
   } else if (f.step === "claude") {
-    $app.innerHTML = `<p><b>3. Sign in to Claude.</b> Approve on claude.ai, then paste the code it shows you here. The token goes into a connector in your own Fly account.</p>
+    $app.innerHTML = `<p><b>4. Sign in to Claude.</b> Approve on claude.ai, then paste the code it shows you here. The token goes into a connector in your own Fly account.</p>
       ${f.error ? `<p class="err">${esc(f.error)}</p>` : ""}
       ${f.loginUrl ? `<a class="btn" href="${esc(f.loginUrl)}" target="_blank" rel="noopener">Sign in to Claude</a>
       <form id="c"><label for="code">Code from Claude</label><input id="code" type="password" autocomplete="off" spellcheck="false" required><div class="row"><button class="btn">Continue</button></div></form>` : `<p>Getting a fresh sign-in link…</p>`}
@@ -107,7 +124,8 @@ function show(f) {
     }
   } else if (f.step === "done") {
     const r = f.result;
-    $app.innerHTML = r.staging
+    const pe = r.pagesError ? `<p class="err">Cloudflare Pages hosting didn't finish: ${esc(r.pagesError)} Retry it from the dashboard.</p>` : "";
+    $app.innerHTML = pe + r.staging
       ? `<p><b>Done.</b> Your preview is at <a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url)}</a>${r.tagPath ? "" : " (we couldn't find an <code>index.html</code> to put the bar in, so add the tag below to your pages on the <code>ak-staging</code> branch)"}. The bar commits to the <code>ak-staging</code> branch, which only the preview shows. When it looks right, tell the bar "deploy to live" and it ships to your live branch.</p>
          ${r.tagPath ? "" : `<pre>${esc(r.tag)}</pre>`}<div class="row"><a class="btn" href="/cloud/open/${esc(f.sprite)}" target="_blank" rel="noopener">Open your preview</a><a class="btn ghost" href="/dashboard">Dashboard</a></div>${steps("done")}`
       : r.starter
