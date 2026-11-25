@@ -35,8 +35,8 @@ function hosting(i, me) {
 }
 // Claude: its own Add custom connector dialog with our /mcp filled in, or (once connected) a new chat.
 const claudeBtn = (me) => me.claude
-  ? `<a class="btn ghost" href="https://claude.ai/new?q=${encodeURIComponent("Let's work on my Agent Keyboard sites")}" target="_blank" rel="noopener">Manage in Claude</a>`
-  : `<a class="btn ghost" href="https://claude.ai/customize/connectors?modal=add-custom-connector&amp;connectorName=Agent%20Keyboard&amp;connectorUrl=${encodeURIComponent("https://agentkeyboard.com/mcp")}" target="_blank" rel="noopener">Connect to Claude</a>`;
+  ? `<a class="btn ghost" id="claude-btn" href="https://claude.ai/new?q=${encodeURIComponent("Let's work on my Agent Keyboard sites")}" target="_blank" rel="noopener">Manage in Claude</a>`
+  : `<a class="btn ghost" id="claude-btn" href="https://claude.ai/customize/connectors?modal=add-custom-connector&amp;connectorName=Agent%20Keyboard&amp;connectorUrl=${encodeURIComponent("https://agentkeyboard.com/mcp")}" target="_blank" rel="noopener">Connect to Claude</a>`;
 // The disconnect icon that removes a custom domain.
 const unlink = (host) => `<button class="icon" data-a="domain-remove" title="Disconnect ${esc(host)}" aria-label="Disconnect ${esc(host)}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18.84 12.25 1.72-1.71a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="m5.17 11.75-1.71 1.71a5 5 0 0 0 7.07 7.07l1.71-1.71"/><path d="M8 2v3M2 8h3M16 19v3M19 16h3"/></svg></button>`;
 // Custom domain (spec #13 M4): add one, then what to do until Pages says it's active.
@@ -137,6 +137,13 @@ async function render(note) {
   }));
 }
 render();
+// Connecting happens in Claude's tab: when this tab comes back, swap the Claude button if that changed (no full re-render).
+document.addEventListener("visibilitychange", async () => {
+  const b = document.getElementById("claude-btn");
+  if (document.hidden || !b) return;
+  const me = await api("me").catch(() => null);
+  if (me?.signedIn && b.textContent !== (me.claude ? "Manage in Claude" : "Connect to Claude")) b.outerHTML = claudeBtn(me);
+});
 </script>
 <script src="https://agent-keyboard.fly.dev/widget.js" data-site="halo" data-accent="#ffb86b" data-theme="dark" data-summon="signed-out" defer></script>
 </body>
