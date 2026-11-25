@@ -112,6 +112,7 @@ export async function provision(opts, progress = () => {}) {
     SUPABASE_URL: supabase.url,
     SUPABASE_ANON_KEY: supabase.anonKey,
     ALLOWED_EMAIL: email,
+    AK_RECOVER_URL: "https://agentkeyboard.com/dashboard", // the bar's "forgot password?"
     AK_INTERNAL_SECRET: randomBytes(24).toString("hex"),
     ANTHROPIC_BASE_URL: `https://api.sprites.dev/v1/gateway/custom_api/${conn.id}`,
     CLAUDE_CODE_OAUTH_TOKEN: "placeholder", // the connector swaps in the real token
