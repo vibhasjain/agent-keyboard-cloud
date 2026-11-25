@@ -122,6 +122,8 @@ export async function provision(opts, progress = () => {}) {
     AK_INTERNAL_SECRET: randomBytes(24).toString("hex"),
     ANTHROPIC_BASE_URL: `https://api.sprites.dev/v1/gateway/custom_api/${conn.id}`,
     CLAUDE_CODE_OAUTH_TOKEN: "placeholder", // the connector swaps in the real token
+    // A blank repo is hosted on the Sprite for now; let the bar work once its own domain points here.
+    ...(blank && opts.domain ? { EXTRA_ORIGINS: `https://${opts.domain},https://www.${opts.domain}` } : {}),
   };
   const envFile = Object.entries(env).map(([k, v]) => `${k}=${shq(v)}`).join("\n") + "\n";
 
