@@ -18,7 +18,7 @@ GITHUB_TOKEN=… SUPABASE_URL=… SUPABASE_ANON_KEY=… SUPABASE_SERVICE_KEY=…
 
 `fly-creds.json` holds the `identity_assertion` from a claimed auth.md registration (chmod 600, never committed).
 
-## Deploy (Fly app `agent-keyboard-cloud`)
+## Deploy (Fly app `agent-keyboard-cloud`, in Lingxiao's Fly account)
 
 ```
 fly apps create agent-keyboard-cloud && fly volumes create cloud_data -a agent-keyboard-cloud -r iad -s 1
