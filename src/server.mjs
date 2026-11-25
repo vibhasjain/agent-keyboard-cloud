@@ -265,14 +265,29 @@ const routes = {
     redirect(res, authorizeUrl(state));
   },
   // OAuth callback, and the App's post-install redirect (which also carries a code).
-  "GET /cloud/github/callback": async (q, req, res) => {
-    const next = states.get(q.get("state")) ?? "start";
+  // Accepting new App permissions also lands here (setup_action=update): back to the dashboard, retrying the
+  // Pages setups that failed for lack of them.
+  "GET /cloud/github/callback": async (q, req, res, s) => {
+    const update = q.get("setup_action") === "update";
+    const next = update ? "dashboard" : states.get(q.get("state")) ?? "start";
     states.delete(q.get("state"));
-    if (!q.get("code")) return redirect(res, `/${next}`);
+    const retry = (email, token) => {
+      const c = cfs.get(email);
+      if (c) for (const i of load().filter((i) => i.email === email && i.pages?.permsUrl)) {
+        upsert({ ...i, pages: { ...i.pages, state: "setting up", detail: "starting", error: null, permsUrl: null } });
+        setupPages(i.id, token, c);
+      }
+    };
+    if (!q.get("code")) {
+      const gu = update && s && ghUser(s.login);
+      if (gu) retry(s.email, gu.token);
+      return redirect(res, `/${next}`);
+    }
     const u = await signIn(q.get("code"));
     users.set(u.login, { token: u.token, installations: u.installations, exp: Date.now() + (u.expiresIn ?? 8 * 3600) * 1000 - 60e3 });
     saveUsers();
     setSession(res, { login: u.login, email: u.email });
+    if (update) retry(u.email, u.token);
     if (next === "start" && !u.installations.length) {
       const state = randomBytes(16).toString("hex");
       states.set(state, "start");
