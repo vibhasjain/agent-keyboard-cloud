@@ -279,7 +279,7 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
         site: i.id, name: i.siteId, status: i.status, repo: i.repo,
         url: i.customDomain?.status === "active" ? `https://${i.customDomain.host}` : i.pages?.staging ?? i.pages?.live ?? i.url,
         staged: !!i.staging, hosting: i.pages?.state === "live" ? "Cloudflare Pages" : i.pages?.state ? `Cloudflare Pages: ${i.pages.state}${i.pages.error ? ` (${i.pages.error})` : ""}` : "not on Pages",
-        domain: i.pages?.state === "live" ? domainText(i) : undefined, open_signed_in: open(i.id), created: i.createdAt?.slice(0, 10), via: i.via ?? "web",
+        domain: i.pages?.state === "live" ? domainText(i) : undefined, teammates: i.team ?? [], open_signed_in: open(i.id), created: i.createdAt?.slice(0, 10), via: i.via ?? "web",
       }))));
     server.registerTool("site_action", {
       description: "restart or update a site's Sprite, (re)host it on Cloudflare Pages (pages), commit the bar's script tag to its index.html (tag), or delete it (removes the Sprite and its Claude connector from the user's Fly account; the repo stays).",
@@ -298,6 +298,14 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
     server.registerTool("remove_domain", { description: "Remove a site's custom domain from Cloudflare Pages (its DNS record stays).", inputSchema: { site }, annotations: { destructiveHint: true } }, async ({ site: id }) => {
       await call("POST", `/cloud/instances/${id}/domain-remove`, {});
       return text("Removed. Its DNS record stays; delete it at the DNS provider if it's no longer needed.");
+    });
+    server.registerTool("invite_teammate", { description: "Let someone use the bar on a site. Returns a single-use join link (7 days) that signs them in on one device; give it to the user to send them. Inviting the same email again makes a new link.", inputSchema: { site, email: z.string().describe("The teammate's email") } }, async ({ site: id, email }) => {
+      const { link } = await call("POST", `/cloud/instances/${id}/invite`, { email });
+      return text(`Invited ${email}. Send them this link (it works once, on one device, within 7 days): ${link}`);
+    });
+    server.registerTool("remove_teammate", { description: "Stop someone from using the bar on a site.", inputSchema: { site, email: z.string() }, annotations: { destructiveHint: true } }, async ({ site: id, email }) => {
+      await call("POST", `/cloud/instances/${id}/uninvite`, { email });
+      return text(`Removed ${email}.`);
     });
     const mine = (id) => load().find((i) => i.id === id && i.email === s.email) ?? Promise.reject(new Error(`No site ${id}. Call list_sites.`));
     server.registerTool("send_message", {

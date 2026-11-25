@@ -25,6 +25,9 @@ const api = async (path, body) => {
 const LABEL = { restart: "Restarting…", update: "Updating… (about a minute)", delete: "Deleting…", autoupdate: "", tag: "Adding…", pages: "Starting…", "domain-remove": "Removing…" };
 let timer;
 
+// Teammates: people who can sign in to this site's bar. Inviting returns a single-use join link to send them.
+const team = (i) => `<form class="team"><label for="tm-${esc(i.id)}">Teammates</label>${(i.team ?? []).map((e) => `<div class="meta">${esc(e)} <button type="button" class="icon" data-email="${esc(e)}" title="Remove ${esc(e)}" aria-label="Remove ${esc(e)}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>`).join("")}<div class="row"><input id="tm-${esc(i.id)}" type="email" placeholder="name@example.com" autocomplete="off" autocapitalize="off" spellcheck="false" required><button class="btn ghost">Invite</button></div></form>`;
+
 // Cloudflare Pages hosting (spec #13): where the site is served, its previews and sandboxes.
 function hosting(i, me) {
   const p = i.pages ?? {};
@@ -85,6 +88,7 @@ async function render(note) {
       ${i.staging ? `<div class="meta">Staged: the bar commits to <b>ak-staging</b> (this preview); tell it "deploy to live" to ship</div>` : ""}
       ${i.starter ? "" : i.tagPath ? "" : `<pre>${esc(i.tag)}</pre>`}
       ${hosting(i, me)}
+      ${team(i)}
       ${i.status === "reconnect Fly" ? `<p class="err">Our access to your Fly account expired or was revoked. Delete and set up again to reconnect.</p>` : ""}
       <div class="row"><a class="btn" href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener">Open site</a>${!me.cloudflare || i.pages?.state === "live" || i.pages?.state === "setting up" ? "" : `<button class="btn ghost" data-a="pages">${i.pages?.state === "error" ? "Retry Cloudflare Pages" : "Host on Cloudflare Pages"}</button>`}${i.starter || i.tagPath ? "" : `<button class="btn ghost" data-a="tag" title="Commits the tag to your repo's index.html">Add the tag for me</button>`}${behind !== false ? `<button class="btn ghost" data-a="update">Update</button>` : ""}<button class="btn ghost" data-a="restart">Restart</button><button class="danger" data-a="delete" title="Delete" aria-label="Delete"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/></svg></button></div>
       <details class="more"><summary>Details</summary><div class="meta">Sprite <b>${esc(i.id)}</b> · ${esc(i.status)} · version ${esc(i.version ?? i.ref)} · since ${esc(i.createdAt.slice(0, 10))}${i.tagPath ? ` · bar in ${esc(i.tagPath)}` : ""}</div></details>
@@ -100,6 +104,28 @@ async function render(note) {
     try { await api(`instances/${id}/domain`, { host: f.querySelector("input").value }); render(); }
     catch (err) { btn.disabled = false; btn.textContent = "Add domain"; f.querySelector(".err")?.remove(); f.insertAdjacentHTML("beforeend", `<p class="err">${esc(err.message)}</p>`); }
   }));
+  $app.querySelectorAll("form.team").forEach((f) => {
+    const id = f.closest(".inst").dataset.id, btn = f.querySelector("button:not([data-email])");
+    const fail = (err) => { f.querySelector(".err")?.remove(); f.insertAdjacentHTML("beforeend", `<p class="err">${esc(err.message)}</p>`); };
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      const email = f.querySelector("input").value;
+      btn.disabled = true; btn.textContent = "Inviting…";
+      try {
+        const { link } = await api(`instances/${id}/invite`, { email });
+        await render();
+        $app.querySelector(`.inst[data-id="${CSS.escape(id)}"] form.team`)?.insertAdjacentHTML("beforeend", `<p class="small">Send ${esc(email)} this link. It signs them in to the bar once, on one device, within 7 days. To sign them in somewhere else, invite them again.</p><pre>${esc(link)}</pre><div class="row"><button type="button" class="btn ghost copy">Copy link</button></div>`);
+        const c = $app.querySelector(`.inst[data-id="${CSS.escape(id)}"] .copy`);
+        if (c) c.onclick = () => navigator.clipboard.writeText(link).then(() => (c.textContent = "Copied"), () => {});
+      } catch (err) { btn.disabled = false; btn.textContent = "Invite"; fail(err); }
+    };
+    f.querySelectorAll("button[data-email]").forEach((x) => (x.onclick = async () => {
+      if (!confirm(`Remove ${x.dataset.email}? They can no longer use the bar on this site.`)) return;
+      x.disabled = true;
+      try { await api(`instances/${id}/uninvite`, { email: x.dataset.email }); render(`Removed ${x.dataset.email}.`); }
+      catch (err) { x.disabled = false; fail(err); }
+    }));
+  });
   // Pasting a token connects Cloudflare, then (if a site asked) hosts that site on Pages.
   // Connecting Cloudflare (once, for every site) hosts each site that isn't on Pages yet.
   const wire = () => {

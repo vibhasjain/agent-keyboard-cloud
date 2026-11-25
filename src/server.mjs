@@ -6,7 +6,7 @@
 // SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY, AK_REF (agent-keyboard ref, default main),
 // GH_APP_* (or the manifest flow).
 
-import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { claudeLoginFinish, claudeLoginStart } from "./claude.mjs";
@@ -61,7 +61,7 @@ function open(s) {
   d.setAuthTag(b.subarray(12, 28));
   return Buffer.concat([d.update(b.subarray(28)), d.final()]).toString("utf8");
 }
-const pub = ({ assertion, ...i }) => i; // never send the assertion anywhere
+const pub = ({ assertion, joins, ...i }) => i; // never send the assertion (or teammates' join tokens) anywhere
 
 // ---- sessions: signed cookie {login,email,exp}; the GitHub user token stays in memory ----
 const mac = (s) => createHmac("sha256", KEY).update(s).digest("base64url");
@@ -304,6 +304,38 @@ async function act(inst, action) {
   }
 }
 
+// The page the bar lives on: Pages (staging first), the custom domain, the Sprite, or the owner's own host.
+function siteUrl(inst) {
+  const pg = inst.pages?.state === "live" && inst.pages;
+  return pg ? pg.staging ?? (inst.customDomain?.status === "active" ? `https://${inst.customDomain.host}` : pg.live) : inst.starter ? inst.url : `https://${inst.domain}`;
+}
+/** The site, already signed in to the bar as `email`: a single-use magic-link token the widget redeems from #ak_handoff=. */
+async function handoff(inst, email) {
+  const site = siteUrl(inst);
+  const r = await fetch(`${supabase.url}/auth/v1/admin/generate_link`, {
+    method: "POST",
+    headers: { apikey: supabase.serviceKey, Authorization: `Bearer ${supabase.serviceKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "magiclink", email }),
+  }).catch(() => null);
+  const d = (await r?.json().catch(() => null)) ?? {};
+  const token = d.hashed_token ?? d.properties?.hashed_token;
+  return token ? `${site}/#ak_handoff=${encodeURIComponent(token)}` : site;
+}
+/** Add or remove a teammate on the Sprite's bar allow-list (the server rereads it within 10 s). */
+async function teamOnSprite(inst, email, add) {
+  const js = `const fs=require("fs"),p=(process.env.AGENT_DATA_DIR||"/data")+"/agent-keyboard/allowed-emails.json",e=${JSON.stringify(email)};let l=[];try{l=JSON.parse(fs.readFileSync(p,"utf8"))}catch{}if(!Array.isArray(l))l=[];l=l.filter(x=>(typeof x==="string"?x:x&&x.email||"").toLowerCase()!==e);${add ? "l.push(e);" : ""}fs.mkdirSync(require("path").dirname(p),{recursive:true});fs.writeFileSync(p+".tmp",JSON.stringify(l,null,2));fs.renameSync(p+".tmp",p)`;
+  await sprites(await mint(open(inst.assertion))).exec(inst.id, `set -a; . ~/ak.env; set +a; node -e ${shq(js)}`, { timeoutMs: 60e3 });
+}
+/** A bar sign-in account for a teammate, confirmed, no email sent (their join link signs them in). */
+async function barAccount(email) {
+  const r = await fetch(`${supabase.url}/auth/v1/admin/users`, {
+    method: "POST",
+    headers: { apikey: supabase.serviceKey, Authorization: `Bearer ${supabase.serviceKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ email, email_confirm: true }),
+  });
+  if (!r.ok && r.status !== 422) throw new Error(`supabase: ${r.status} ${(await r.text()).slice(0, 200)}`);
+}
+
 async function status(inst) {
   const c = inst.customDomain?.status === "pending" && Date.now() - (inst.customDomain.checkedAt ?? 0) > 30e3 && cfs.get(inst.email);
   if (c) { await checkDomain(inst.id, c); inst = load().find((x) => x.id === inst.id) ?? inst; }
@@ -494,24 +526,41 @@ async function dispatch(req, res, u, s, b) {
     if (req.method === "GET" && o) {
       const inst = s && load().find((i) => i.id === o[1] && i.email === s.email);
       if (!inst) return redirect(res, "/dashboard");
-      const pg = inst.pages?.state === "live" && inst.pages;
-      const site = pg ? pg.staging ?? (inst.customDomain?.status === "active" ? `https://${inst.customDomain.host}` : pg.live) : inst.starter ? inst.url : `https://${inst.domain}`;
-      const r = await fetch(`${supabase.url}/auth/v1/admin/generate_link`, {
-        method: "POST",
-        headers: { apikey: supabase.serviceKey, Authorization: `Bearer ${supabase.serviceKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "magiclink", email: inst.email }),
-      }).catch(() => null);
-      const d = (await r?.json().catch(() => null)) ?? {};
-      const token = d.hashed_token ?? d.properties?.hashed_token;
-      return redirect(res, token ? `${site}/#ak_handoff=${encodeURIComponent(token)}` : site);
+      return redirect(res, await handoff(inst, inst.email));
     }
-    const m = u.pathname.match(/^\/cloud\/instances\/([\w-]+)\/(restart|update|autoupdate|delete|tag|pages|domain|domain-remove)$/);
+    // A teammate's join link: single-use, 7 days. Signs them in to the bar on that site.
+    const j = u.pathname.match(/^\/cloud\/join\/([\w-]{20,})$/);
+    if (req.method === "GET" && j) {
+      const h = createHash("sha256").update(j[1]).digest("base64url");
+      const inst = load().find((i) => i.joins?.[h]);
+      const join = inst?.joins[h];
+      if (!join) return send(res, 410, "This invite link was already used or has expired. Ask whoever invited you for a new one.", "text/plain; charset=utf-8");
+      const { [h]: _, ...rest } = inst.joins;
+      upsert({ ...inst, joins: rest });
+      if (join.exp < Date.now() || !inst.team?.includes(join.email)) return send(res, 410, "This invite link has expired. Ask whoever invited you for a new one.", "text/plain; charset=utf-8");
+      return redirect(res, await handoff(inst, join.email));
+    }
+    const m = u.pathname.match(/^\/cloud\/instances\/([\w-]+)\/(restart|update|autoupdate|delete|tag|pages|domain|domain-remove|invite|uninvite)$/);
     if (req.method === "POST" && m) {
       const inst = s && load().find((i) => i.id === m[1] && i.email === s.email);
       if (!inst) return send(res, 404, { error: "No such instance" });
       if (m[2] === "autoupdate") {
         upsert({ ...inst, autoUpdate: inst.autoUpdate === false });
         return send(res, 200, { ok: true });
+      }
+      if (m[2] === "invite" || m[2] === "uninvite") {
+        const email = String(b?.email ?? "").trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) return send(res, 400, { error: "Type an email like name@example.com" });
+        if (email === inst.email) return send(res, 400, { error: "That's you, the owner" });
+        const add = m[2] === "invite";
+        if (add) await barAccount(email);
+        await teamOnSprite(inst, email, add);
+        const team = (inst.team ?? []).filter((e) => e !== email).concat(add ? [email] : []);
+        const now = Date.now(), joins = Object.fromEntries(Object.entries(inst.joins ?? {}).filter(([, v]) => v.exp > now && v.email !== email));
+        const token = add && randomBytes(24).toString("base64url");
+        if (token) joins[createHash("sha256").update(token).digest("base64url")] = { email, exp: now + 7 * 864e5 };
+        upsert({ ...inst, team, joins });
+        return send(res, 200, add ? { ok: true, link: `${BASE}/cloud/join/${token}` } : { ok: true });
       }
       if (m[2] === "tag") {
         const gu = ghUser(s.login);
