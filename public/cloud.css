@@ -29,3 +29,4 @@ pre{ font:13px/1.5 var(--mono); white-space:pre-wrap; word-break:break-all; back
 .dot{ display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--ink-3); margin-right:6px; } .dot.on{ background:var(--ok); }
 @media (prefers-reduced-motion:no-preference){ .steps li.now::before{ animation:pulse 1.4s ease-in-out infinite; } }
 @keyframes pulse{ 50%{ opacity:.3; } }
+.icon{ display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; vertical-align:middle; margin:-3px 0 0; border:0; border-radius:6px; background:transparent; color:var(--ink-3); cursor:pointer; } .icon:hover{ color:var(--err); } .icon:focus-visible{ outline:2px solid rgba(255,184,107,.5); }

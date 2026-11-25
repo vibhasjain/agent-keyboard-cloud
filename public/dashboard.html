@@ -37,15 +37,15 @@ function hosting(i, me) {
 function domain(i) {
   const d = i.customDomain, sub = i.pages.sub, link = (h) => `<a href="https://${esc(h)}" target="_blank" rel="noopener">${esc(h)}</a>`;
   if (!d) return `<form class="dom"><label for="dom-${esc(i.id)}">Your domain (optional)</label><div class="row"><input id="dom-${esc(i.id)}" placeholder="www.example.com" autocomplete="off" autocapitalize="off" spellcheck="false" required><button class="btn ghost">Add domain</button></div></form>`;
-  const rm = `<button class="btn ghost" data-a="domain-remove">Remove domain</button>`;
+  const rm = `<button class="icon" data-a="domain-remove" title="Disconnect ${esc(d.host)}" aria-label="Disconnect ${esc(d.host)}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18.84 12.25 1.72-1.71a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="m5.17 11.75-1.71 1.71a5 5 0 0 0 7.07 7.07l1.71-1.71"/><path d="M8 2v3M2 8h3M16 19v3M19 16h3"/></svg></button>`;
   const err = d.error ? `<p class="err">${esc(d.error)}</p>` : "";
-  if (d.status === "active") return `<div class="meta">Live at ${link(d.host)} ✓</div>${err}<div class="row">${rm}</div>`;
+  if (d.status === "active") return `<div class="meta">Live at ${link(d.host)} ✓ ${rm}</div>${err}`;
   let how;
   if (d.zone?.status === "active") how = `We pointed ${esc(d.host)} at your Pages site in your Cloudflare DNS. Cloudflare is issuing its certificate, usually a few minutes.`;
   else if (d.zone) how = `${esc(d.host)} is in your Cloudflare account but not active yet. At your registrar, set its nameservers to <b>${d.zone.ns.map(esc).join("</b> and <b>")}</b>. That can take a few hours to take effect.`;
   else if (d.apex) how = `A root domain needs its DNS on Cloudflare (free). <a href="https://dash.cloudflare.com/?to=/:account/add-site" target="_blank" rel="noopener">Add ${esc(d.host)} to Cloudflare</a>, then switch its nameservers at your registrar to the two Cloudflare shows. We point it at your site as soon as it appears. Or use a subdomain like www.${esc(d.host)} instead.`;
   else how = `At your DNS provider, add this record:</div><pre>CNAME  ${esc(d.host)}  →  ${esc(sub)}</pre><div class="meta">${d.now === sub ? "✓ Found it." : `✗ Not there yet${d.now ? ` (it points to ${esc(d.now)})` : ""}.`} Then Cloudflare issues the certificate.`;
-  return `<div class="meta"><b>${esc(d.host)}</b>: ${how} We check every 30 seconds.</div>${err}<div class="row">${rm}</div>`;
+  return `<div class="meta"><b>${esc(d.host)}</b> ${rm} · ${how} We check every 30 seconds.</div>${err}`;
 }
 function cfForm(me) {
   return `<div class="card" id="cf"><h2>Connect Cloudflare</h2>${me.cloudflare ? "" : `<p>Your sites are hosted on Cloudflare Pages in your own account: fast, a preview for every change, sandboxes, and your own domain. Connect it once for all of them.</p>`}
@@ -117,7 +117,7 @@ async function render(note) {
     const id = b.closest(".inst").dataset.id, a = b.dataset.a;
     if (a === "domain-remove" && !confirm("Remove this domain from your Pages site? Its DNS record stays; delete it yourself if you no longer need it.")) return;
     if (a === "delete" && !confirm(`Delete ${id}? This removes the Sprite and its Claude connector from your Fly account. Your repo stays.`)) return;
-    b.closest(".row").querySelectorAll("button").forEach((x) => (x.disabled = true));
+    (b.closest(".row")?.querySelectorAll("button") ?? [b]).forEach((x) => (x.disabled = true));
     b.textContent = LABEL[a];
     try { const r = await api(`instances/${id}/${a}`, {}); render(a === "delete" ? `Deleted ${id}.` : a === "domain-remove" ? "Removed the domain." : a === "tag" ? `Added the tag to ${r.path}. Your host redeploys from that commit.` : a === "autoupdate" ? `${id}: auto-update ${b.getAttribute("aria-pressed") === "true" ? "off" : "on"}.` : `${id}: ${a} done.`); }
     catch (e) { if (e.message === "Sign in with GitHub again") location.href = "/cloud/github/login?next=dashboard"; else render(e.message); }
