@@ -12,7 +12,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { claudeLoginFinish, claudeLoginStart } from "./claude.mjs";
 import { mint, pollClaim, register, sprites } from "./fly.mjs";
 import { appReady, authorizeUrl, createdFromManifest, installUrl, loadApp, manifest, signIn, userRepos } from "./githubapp.mjs";
-import { addTag } from "./github.mjs";
+import { addTag, getRepo, putSecret, putVariable, writeFile } from "./github.mjs";
+import { TOKEN_URL, WORKFLOW, ensureProject, pagesMemory, verify } from "./cloudflare.mjs";
 import { ensureSprite, provision, slug, spriteName } from "./provision.mjs";
 
 const env = process.env;
@@ -67,6 +68,11 @@ const USERS = `${DATA}/users.json`;
 let users;
 try { users = new Map(Object.entries(existsSync(USERS) ? JSON.parse(open(readFileSync(USERS, "utf8"))) : {})); } catch { users = new Map(); }
 const saveUsers = () => writeFileSync(USERS, seal(JSON.stringify(Object.fromEntries(users))), { mode: 0o600 });
+// email → { token (sealed), accountId, accountName }: the user's Cloudflare connection, reused for every instance (spec #13).
+const CF = `${DATA}/cloudflare.json`;
+let cfs;
+try { cfs = new Map(Object.entries(existsSync(CF) ? JSON.parse(open(readFileSync(CF, "utf8"))) : {})); } catch { cfs = new Map(); }
+const saveCfs = () => writeFileSync(CF, seal(JSON.stringify(Object.fromEntries(cfs))), { mode: 0o600 });
 const ghUser = (login) => { const u = users.get(login); return u && u.exp > Date.now() ? u : null; };
 const flows = new Map(); // email → the start flow in progress
 const states = new Map(); // oauth state → "start" | "dashboard"
@@ -139,6 +145,46 @@ async function runProvision(flow, code) {
 }
 
 const flowView = (f) => f && { step: f.step, detail: f.detail, error: f.error, userCode: f.userCode, verifyUrl: f.verifyUrl, loginUrl: f.loginUrl, result: f.result, sprite: f.sprite };
+
+// ---- Cloudflare Pages (spec #13): project, repo secret + variables, the workflow, then the Sprite's config ----
+const WORKFLOW_PATH = ".github/workflows/agent-keyboard-pages.yml";
+async function setupPages(id, ghToken, c) {
+  const set = (pages) => { const i = load().find((x) => x.id === id); if (i) upsert({ ...i, pages: { ...i.pages, ...pages } }); };
+  try {
+    const inst = load().find((x) => x.id === id);
+    const token = open(c.token);
+    set({ state: "setting up", detail: "creating the Pages project", error: null });
+    const live = (await getRepo(ghToken, inst.repo)).default_branch || "main";
+    const p = await ensureProject(token, c.accountId, inst.siteId, live);
+    set({ detail: "adding the deploy workflow to your repo", project: p.name, sub: p.subdomain });
+    await putSecret(ghToken, inst.repo, "CLOUDFLARE_API_TOKEN", token);
+    await putVariable(ghToken, inst.repo, "CLOUDFLARE_ACCOUNT_ID", c.accountId);
+    await putVariable(ghToken, inst.repo, "CLOUDFLARE_PAGES_PROJECT", p.name);
+    for (const b of inst.staging ? ["ak-staging", live] : [live]) await writeFile(ghToken, inst.repo, b, WORKFLOW_PATH, WORKFLOW, "Deploy to Cloudflare Pages (Agent Keyboard)");
+    set({ detail: "turning on sandboxes" });
+    // The Sprite: sandbox previews on Pages, the Pages origins allowed to call the bar, and the agent's memory.
+    const api = sprites(await mint(open(inst.assertion)));
+    const { out } = await api.exec(id, `. ~/ak.env; printf '%s\\n%s' "$SITES" "$EXTRA_ORIGINS"`, { timeoutMs: 60e3 });
+    const [sitesJson, had = ""] = out.trim().split("\n");
+    const sites = JSON.parse(sitesJson);
+    sites[0].sandbox = { preview: `https://{branch}.${p.subdomain}` };
+    const extra = [...new Set([...had.split(",").filter(Boolean), `https://${p.subdomain}`, `https://ak-staging.${p.subdomain}`])].join(",");
+    const lines = `SITES=${shq(JSON.stringify(sites))}\nEXTRA_ORIGINS=${shq(extra)}\n`;
+    const memory = pagesMemory({ sub: p.subdomain, live, staging: inst.staging });
+    await api.exec(id, [
+      `grep -v -e '^SITES=' -e '^EXTRA_ORIGINS=' ~/ak.env > ~/ak.env.new`,
+      `printf %s ${shq(Buffer.from(lines).toString("base64"))} | base64 -d >> ~/ak.env.new`,
+      `chmod 600 ~/ak.env.new && mv ~/ak.env.new ~/ak.env`,
+      `mkdir -p ~/.claude && printf %s ${shq(Buffer.from(memory).toString("base64"))} | base64 -d > ~/.claude/CLAUDE.md`,
+      `sprite-env services restart ak`,
+    ].join(" && "), { timeoutMs: 120e3 });
+    set({ state: "live", detail: "", live: `https://${p.subdomain}`, staging: inst.staging ? `https://ak-staging.${p.subdomain}` : null });
+  } catch (e) {
+    console.error("pages", id, e.message);
+    set({ state: "error", detail: "", error: /Resource not accessible by integration/.test(e.message) ? "Agent Keyboard needs new GitHub permissions (secrets, variables, workflows). Accept them on GitHub, then try again." : e.message });
+  }
+}
+const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
 // ---- dashboard actions ----
 async function act(inst, action) {
@@ -241,7 +287,7 @@ const routes = {
   "GET /cloud/me": (q, req, res, s) => {
     if (!s) return send(res, 200, { signedIn: false, app: appReady() });
     const inst = load().find((i) => i.email === s.email);
-    send(res, 200, { signedIn: true, login: s.login, email: s.email, github: !!ghUser(s.login), installUrl: appReady() ? installUrl("start") : null, instance: inst && pub(inst), flow: flowView(flows.get(s.email)) });
+    send(res, 200, { signedIn: true, login: s.login, email: s.email, github: !!ghUser(s.login), installUrl: appReady() ? installUrl("start") : null, instance: inst && pub(inst), cloudflare: cfs.get(s.email)?.accountName ?? null, cloudflareTokenUrl: TOKEN_URL, flow: flowView(flows.get(s.email)) });
   },
   "GET /cloud/repos": async (q, req, res, s) => {
     const u = s && ghUser(s.login);
@@ -280,6 +326,17 @@ const routes = {
     send(res, 200, flowView(f));
   },
 
+  // Connect Cloudflare once (spec #13): verify the pasted token and keep it sealed for this user's instances.
+  "POST /cloud/cloudflare": async (q, req, res, s, b) => {
+    if (!s) return send(res, 401, { error: "Sign in" });
+    const token = String(b.token ?? "").trim();
+    if (!/^[\w-]{30,80}$/.test(token)) return send(res, 400, { error: "Paste the token Cloudflare showed you" });
+    const a = await verify(token);
+    cfs.set(s.email, { token: seal(token), ...a });
+    saveCfs();
+    send(res, 200, { accountName: a.accountName });
+  },
+
   "GET /cloud/instances": async (q, req, res, s) => {
     if (!s) return send(res, 401, { error: "Sign in" });
     send(res, 200, { instances: await Promise.all(load().filter((i) => i.email === s.email).map(status)) });
@@ -306,7 +363,7 @@ createServer(async (req, res) => {
       const token = d.hashed_token ?? d.properties?.hashed_token;
       return redirect(res, token ? `${site}/#ak_handoff=${encodeURIComponent(token)}` : site);
     }
-    const m = u.pathname.match(/^\/cloud\/instances\/([\w-]+)\/(restart|update|delete|tag)$/);
+    const m = u.pathname.match(/^\/cloud\/instances\/([\w-]+)\/(restart|update|delete|tag|pages)$/);
     if (req.method === "POST" && m) {
       await body(req);
       const inst = s && load().find((i) => i.id === m[1] && i.email === s.email);
@@ -317,6 +374,15 @@ createServer(async (req, res) => {
         const path = await addTag(gu.token, inst.repo, inst.tag, inst.staging ? "ak-staging" : undefined);
         upsert({ ...inst, tagPath: path });
         return send(res, 200, { ok: true, path });
+      }
+      if (m[2] === "pages") {
+        const gu = ghUser(s.login), c = cfs.get(s.email);
+        if (!gu) return send(res, 401, { error: "Sign in with GitHub again" });
+        if (!c) return send(res, 400, { error: "Connect Cloudflare first" });
+        if (inst.pages?.state === "setting up") return send(res, 409, { error: "Already setting up" });
+        upsert({ ...inst, pages: { ...inst.pages, state: "setting up", detail: "starting", error: null } });
+        setupPages(inst.id, gu.token, c);
+        return send(res, 200, { ok: true });
       }
       await act(inst, m[2]);
       return send(res, 200, { ok: true });

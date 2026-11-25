@@ -22,7 +22,27 @@ const api = async (path, body) => {
   if (!r.ok) throw new Error(d.error || "Something went wrong (" + r.status + ")");
   return d;
 };
-const LABEL = { restart: "Restarting…", update: "Updating… (about a minute)", delete: "Deleting…", tag: "Adding…" };
+const LABEL = { restart: "Restarting…", update: "Updating… (about a minute)", delete: "Deleting…", tag: "Adding…", pages: "Starting…" };
+let timer;
+
+// Cloudflare Pages hosting (spec #13): where the site is served, its previews and sandboxes.
+function hosting(i, me) {
+  const p = i.pages ?? {};
+  if (p.state === "live") return `<div class="meta">Hosted on Cloudflare Pages: <a href="${esc(p.live)}" target="_blank" rel="noopener">${esc(p.live.replace("https://", ""))}</a>${p.staging ? ` · staging <a href="${esc(p.staging)}" target="_blank" rel="noopener">${esc(p.staging.replace("https://", ""))}</a>` : ""} · sandboxes on. Each push deploys in about a minute.</div>`;
+  if (p.state === "setting up") return `<div class="meta">Cloudflare Pages: ${esc(p.detail || "setting up")}…</div>`;
+  const err = p.state === "error" ? `<p class="err">${esc(p.error)}</p>` : "";
+  if (me.cloudflare) return `${err}<div class="meta">Serve it from Cloudflare Pages (${esc(me.cloudflare)}): fast even when the Sprite sleeps, a preview for every branch, and sandboxes.</div>`;
+  return `${err}<div class="meta">Connect Cloudflare to serve this site from Cloudflare Pages: fast even when the Sprite sleeps, a preview for every branch, and sandboxes.</div>`;
+}
+function cfForm(me) {
+  return `<div class="card" id="cf"><h2>Connect Cloudflare</h2>
+    <p>1. Open Cloudflare's token page, already filled in for Agent Keyboard (Pages and DNS on your account). New to Cloudflare? Sign up there first; it's free.</p>
+    <div class="row"><a class="btn ghost" href="${esc(me.cloudflareTokenUrl)}" target="_blank" rel="noopener">Open Cloudflare</a></div>
+    <p>2. Scroll down, click <b>Continue to summary</b>, then <b>Create token</b>. Copy the token and paste it here.</p>
+    <form id="cff"><label for="cft">Cloudflare token</label><input id="cft" type="password" autocomplete="off" spellcheck="false" required>
+    <div class="row"><button class="btn">Connect</button><button class="btn ghost" type="button" id="cfx">Cancel</button></div></form>
+    <p class="small">Your token goes into your repo's GitHub Actions secrets, where the deploy workflow uses it, and is kept encrypted here to set up your other sites. Revoke it any time on Cloudflare's token page.</p></div>`;
+}
 
 async function render(note) {
   const me = await api("me").catch(() => ({}));
@@ -39,11 +59,38 @@ async function render(note) {
       <div class="meta">Repo <a href="https://github.com/${esc(i.repo)}" target="_blank" rel="noopener">${esc(i.repo)}</a> · ${i.starter ? `site <a href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar">${esc(i.url)}</a>` : `site <a href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar">${esc(i.domain)}</a>`}</div>
       ${i.staging ? `<div class="meta">Staged: the bar commits to <b>ak-staging</b> (this preview); tell it "deploy to live" to ship</div>` : ""}
       ${i.starter ? "" : i.tagPath ? `<div class="meta">Bar added to <b>${esc(i.tagPath)}</b></div>` : `<pre>${esc(i.tag)}</pre>`}
+      ${hosting(i, me)}
       ${i.status === "reconnect Fly" ? `<p class="err">Our access to your Fly account expired or was revoked. Delete and set up again to reconnect.</p>` : ""}
-      <div class="row">${i.starter || i.tagPath ? "" : `<button class="btn ghost" data-a="tag" title="Commits the tag to your repo's index.html">Add the tag for me</button>`}<button class="btn ghost" data-a="restart">Restart</button><button class="btn ghost" data-a="update">Update</button><button class="btn ghost" data-a="delete">Delete</button></div>
-    </div>`).join("") + `<a class="btn ghost" href="/start">Add another site</a>`;
+      <div class="row">${i.pages?.state === "live" || i.pages?.state === "setting up" ? "" : `<button class="btn" data-a="pages">${me.cloudflare ? "Host on Cloudflare Pages" : "Connect Cloudflare"}</button>`}${i.starter || i.tagPath ? "" : `<button class="btn ghost" data-a="tag" title="Commits the tag to your repo's index.html">Add the tag for me</button>`}<button class="btn ghost" data-a="restart">Restart</button><button class="btn ghost" data-a="update">Update</button><button class="btn ghost" data-a="delete">Delete</button></div>
+    </div>`).join("") + `<div class="row"><a class="btn ghost" href="/start">Add another site</a></div>${me.cloudflare ? `<p class="small">Cloudflare: connected (${esc(me.cloudflare)}) · <a href="#" id="cfre">Use a different token</a></p>` : ""}<div id="cfslot"></div>`;
+  clearTimeout(timer);
+  if (list.some((i) => i.pages?.state === "setting up")) timer = setTimeout(() => render(note), 3000);
+  // Pasting a token connects Cloudflare, then (if a site asked) hosts that site on Pages.
+  const connect = (id) => {
+    const slot = document.getElementById("cfslot");
+    slot.innerHTML = cfForm(me);
+    slot.scrollIntoView({ behavior: "smooth" });
+    document.getElementById("cfx").onclick = () => (slot.innerHTML = "");
+    document.getElementById("cff").onsubmit = async (e) => {
+      e.preventDefault();
+      const btn = e.target.querySelector("button");
+      btn.disabled = true; btn.textContent = "Checking…";
+      try {
+        const r = await api("cloudflare", { token: document.getElementById("cft").value });
+        if (id) await api(`instances/${id}/pages`, {});
+        render(`Connected Cloudflare (${r.accountName}).${id ? " Setting up Pages…" : ""}`);
+      } catch (err) {
+        if (err.message === "Sign in with GitHub again") return (location.href = "/cloud/github/login?next=dashboard");
+        btn.disabled = false; btn.textContent = "Connect";
+        slot.querySelector(".err")?.remove();
+        e.target.insertAdjacentHTML("afterend", `<p class="err">${esc(err.message)}</p>`);
+      }
+    };
+  };
+  document.getElementById("cfre")?.addEventListener("click", (e) => { e.preventDefault(); connect(null); });
   $app.querySelectorAll("button[data-a]").forEach((b) => (b.onclick = async () => {
     const id = b.closest(".inst").dataset.id, a = b.dataset.a;
+    if (a === "pages" && !me.cloudflare) return connect(id);
     if (a === "delete" && !confirm(`Delete ${id}? This removes the Sprite and its Claude connector from your Fly account. Your repo stays.`)) return;
     b.closest(".row").querySelectorAll("button").forEach((x) => (x.disabled = true));
     b.textContent = LABEL[a];

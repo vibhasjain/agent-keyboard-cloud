@@ -86,3 +86,27 @@ export async function addTag(token, fullName, tag, branch) {
   }
   throw Object.assign(new Error("Couldn't find an index.html with a </body> to add it to. Paste the tag into your pages yourself."), { code: 422 });
 }
+
+/** An Actions secret, sealed to the repo's public key (libsodium sealed box, as GitHub requires). */
+export async function putSecret(token, fullName, name, value) {
+  const { default: sodium } = await import("libsodium-wrappers");
+  await sodium.ready;
+  const { key, key_id } = await gh(token, "GET", `/repos/${fullName}/actions/secrets/public-key`);
+  const sealed = sodium.crypto_box_seal(sodium.from_string(value), sodium.from_base64(key, sodium.base64_variants.ORIGINAL));
+  await gh(token, "PUT", `/repos/${fullName}/actions/secrets/${name}`, { encrypted_value: sodium.to_base64(sealed, sodium.base64_variants.ORIGINAL), key_id });
+}
+
+/** An Actions variable (created, or updated if it exists). */
+export async function putVariable(token, fullName, name, value) {
+  await gh(token, "PATCH", `/repos/${fullName}/actions/variables/${name}`, { name, value }).catch((e) =>
+    e.status === 404 ? gh(token, "POST", `/repos/${fullName}/actions/variables`, { name, value }) : Promise.reject(e));
+}
+
+/** Write `path` on `branch` (created or replaced). Returns false when it was already identical. */
+export async function writeFile(token, fullName, branch, path, content, message) {
+  const f = await gh(token, "GET", `/repos/${fullName}/contents/${path}?ref=${encodeURIComponent(branch)}`).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
+  if (f?.content && Buffer.from(f.content, "base64").toString("utf8") === content) return false;
+  await gh(token, "PUT", `/repos/${fullName}/contents/${path}`, { message, branch, content: Buffer.from(content).toString("base64"), ...(f ? { sha: f.sha } : {}) });
+  return true;
+}
+
