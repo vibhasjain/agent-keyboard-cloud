@@ -196,7 +196,7 @@ const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 const HOST = /^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 async function checkDomain(id, c) {
   const inst = load().find((x) => x.id === id);
-  const d = inst?.domain;
+  const d = inst?.customDomain;
   if (!d) return;
   const token = open(c.token), { project, sub } = inst.pages;
   const next = { ...d, checkedAt: Date.now(), error: null };
@@ -212,7 +212,7 @@ async function checkDomain(id, c) {
     next.error = e.message;
   }
   const cur = load().find((x) => x.id === id);
-  if (cur?.domain?.host === d.host) upsert({ ...cur, domain: next });
+  if (cur?.customDomain?.host === d.host) upsert({ ...cur, customDomain: next });
 }
 /** Let the bar on `origin` call the Sprite (CORS): add it to the Sprite's EXTRA_ORIGINS. */
 async function addOrigin(inst, origin) {
@@ -245,7 +245,7 @@ async function act(inst, action) {
 }
 
 async function status(inst) {
-  const c = inst.domain?.status === "pending" && Date.now() - (inst.domain.checkedAt ?? 0) > 30e3 && cfs.get(inst.email);
+  const c = inst.customDomain?.status === "pending" && Date.now() - (inst.customDomain.checkedAt ?? 0) > 30e3 && cfs.get(inst.email);
   if (c) { await checkDomain(inst.id, c); inst = load().find((x) => x.id === inst.id) ?? inst; }
   try {
     const s = await sprites(await mint(open(inst.assertion))).get(inst.id);
@@ -420,7 +420,7 @@ createServer(async (req, res) => {
       const inst = s && load().find((i) => i.id === o[1] && i.email === s.email);
       if (!inst) return redirect(res, "/dashboard");
       const pg = inst.pages?.state === "live" && inst.pages;
-      const site = pg ? pg.staging ?? (inst.domain?.status === "active" ? `https://${inst.domain.host}` : pg.live) : inst.starter ? inst.url : `https://${inst.domain}`;
+      const site = pg ? pg.staging ?? (inst.customDomain?.status === "active" ? `https://${inst.customDomain.host}` : pg.live) : inst.starter ? inst.url : `https://${inst.domain}`;
       const r = await fetch(`${supabase.url}/auth/v1/admin/generate_link`, {
         method: "POST",
         headers: { apikey: supabase.serviceKey, Authorization: `Bearer ${supabase.serviceKey}`, "Content-Type": "application/json" },
@@ -447,14 +447,14 @@ createServer(async (req, res) => {
         if (!c || inst.pages?.state !== "live") return send(res, 400, { error: "Host the site on Cloudflare Pages first" });
         const token = open(c.token);
         if (m[2] === "domain-remove") {
-          if (inst.domain) await removePagesDomain(token, c.accountId, inst.pages.project, inst.domain.host);
-          upsert({ ...inst, domain: null });
+          if (inst.customDomain) await removePagesDomain(token, c.accountId, inst.pages.project, inst.customDomain.host);
+          upsert({ ...inst, customDomain: null });
           return send(res, 200, { ok: true });
         }
         const host = String(b?.host ?? "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/[/:].*$/, "").replace(/\.$/, "");
         if (!HOST.test(host) || /\.(pages\.dev|sprites\.app|workers\.dev)$/.test(host)) return send(res, 400, { error: "Type a domain like www.example.com" });
         await addPagesDomain(token, c.accountId, inst.pages.project, host);
-        upsert({ ...inst, domain: { host, status: "pending" } });
+        upsert({ ...inst, customDomain: { host, status: "pending" } });
         await addOrigin(inst, `https://${host}`);
         await checkDomain(inst.id, c);
         return send(res, 200, { ok: true });

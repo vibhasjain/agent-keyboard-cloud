@@ -35,7 +35,7 @@ function hosting(i, me) {
 }
 // Custom domain (spec #13 M4): add one, then what to do until Pages says it's active.
 function domain(i) {
-  const d = i.domain, sub = i.pages.sub, link = (h) => `<a href="https://${esc(h)}" target="_blank" rel="noopener">${esc(h)}</a>`;
+  const d = i.customDomain, sub = i.pages.sub, link = (h) => `<a href="https://${esc(h)}" target="_blank" rel="noopener">${esc(h)}</a>`;
   if (!d) return `<form class="dom"><label for="dom-${esc(i.id)}">Your domain (optional)</label><div class="row"><input id="dom-${esc(i.id)}" placeholder="www.example.com" autocomplete="off" autocapitalize="off" spellcheck="false" required><button class="btn ghost">Add domain</button></div></form>`;
   const rm = `<button class="btn ghost" data-a="domain-remove">Remove domain</button>`;
   const err = d.error ? `<p class="err">${esc(d.error)}</p>` : "";
@@ -69,7 +69,7 @@ async function render(note) {
     <div class="card inst" data-id="${esc(i.id)}">
       <h2><span class="dot ${["running", "warm", "cold"].includes(i.status) ? "on" : ""}"></span>${esc(i.siteId)}</h2>
       <div class="meta">Sprite <b>${esc(i.id)}</b> · ${esc(i.status)} · version ${esc(i.ref)} · since ${esc(i.createdAt.slice(0, 10))}</div>
-      <div class="meta">Repo <a href="https://github.com/${esc(i.repo)}" target="_blank" rel="noopener">${esc(i.repo)}</a> · site <a href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar">${esc(i.pages?.state === "live" ? (i.pages.staging ?? (i.domain?.status === "active" ? i.domain.host : i.pages.live)).replace("https://", "") : i.starter ? i.url : i.domain)}</a></div>
+      <div class="meta">Repo <a href="https://github.com/${esc(i.repo)}" target="_blank" rel="noopener">${esc(i.repo)}</a> · site <a href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar">${esc(i.pages?.state === "live" ? (i.pages.staging ?? (i.customDomain?.status === "active" ? i.customDomain.host : i.pages.live)).replace("https://", "") : i.starter ? i.url : i.domain)}</a></div>
       ${i.staging ? `<div class="meta">Staged: the bar commits to <b>ak-staging</b> (this preview); tell it "deploy to live" to ship</div>` : ""}
       ${i.starter ? "" : i.tagPath ? `<div class="meta">Bar added to <b>${esc(i.tagPath)}</b></div>` : `<pre>${esc(i.tag)}</pre>`}
       ${hosting(i, me)}
@@ -78,7 +78,7 @@ async function render(note) {
     </div>`).join("") + `<div class="row"><a class="btn ghost" href="/start">Add another site</a></div>${me.cloudflare ? `<p class="small">Cloudflare: connected (${esc(me.cloudflare)}) · <a href="#" id="cfre">Use a different token</a></p>` : ""}<div id="cfslot"></div>`;
   clearTimeout(timer);
   if (list.some((i) => i.pages?.state === "setting up")) timer = setTimeout(() => render(note), 3000);
-  else if (list.some((i) => i.domain?.status === "pending")) timer = setTimeout(() => render(note), 30e3);
+  else if (list.some((i) => i.customDomain?.status === "pending")) timer = setTimeout(() => render(note), 30e3);
   $app.querySelectorAll("form.dom").forEach((f) => (f.onsubmit = async (e) => {
     e.preventDefault();
     const id = f.closest(".inst").dataset.id, btn = f.querySelector("button");
