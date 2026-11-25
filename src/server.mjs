@@ -551,7 +551,7 @@ async function dispatch(req, res, u, s, b) {
     await h(u.searchParams, req, res, s, b);
 }
 
-const mcpServer = mcp({ notify, BASE, DATA, seal, open, session, ghUser, fresh, dispatch, send, redirect, mac });
+const mcpServer = mcp({ notify, BASE, DATA, seal, open, session, ghUser, fresh, dispatch, send, redirect, mac, load, supabase });
 createServer(async (req, res) => {
   const u = new URL(req.url, BASE);
   const s = session(req);

@@ -5,7 +5,7 @@
 // dashboard (dispatch), with the session the access token stands for. Secrets (the Cloudflare token,
 // the Claude code) are pasted on /start, never into the chat.
 
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -23,12 +23,13 @@ async function read(req, limit = 1e6) {
   return Object.fromEntries(new URLSearchParams(s));
 }
 
-export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, send, redirect, mac }) {
+export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, send, redirect, mac, load, supabase }) {
   const FILE = `${DATA}/oauth.json`;
   let db = null;
   try { if (existsSync(FILE)) db = JSON.parse(open(readFileSync(FILE, "utf8"))); } catch {}
   db ??= { clients: {}, access: {}, refresh: {} };
   const save = () => writeFileSync(FILE, seal(JSON.stringify(db)), { mode: 0o600 });
+  const barTokens = new Map(); // email → { token, exp }: a Supabase session minted like /cloud/open's handoff
   const codes = new Map(); // code → { client, redirect_uri, challenge, login, email, exp }
 
   const json = (res, code, body, headers = {}) => (res.writeHead(code, { "Content-Type": "application/json", "Cache-Control": "no-store", ...CORS, ...headers }), res.end(JSON.stringify(body)));
@@ -139,6 +140,69 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
     claude: (login) => Object.values(db.refresh).some((g) => g.login === login && g.exp > Date.now() && /claude/i.test(db.clients[g.client]?.client_name ?? "")),
   });
 
+  // ---- relay (spec #15): talk to a site's own agent as its owner, through the same API the bar uses ----
+  async function barToken(email) {
+    const c = barTokens.get(email);
+    if (c?.exp > Date.now()) return c.token;
+    const l = await fetch(`${supabase.url}/auth/v1/admin/generate_link`, {
+      method: "POST",
+      headers: { apikey: supabase.serviceKey, Authorization: `Bearer ${supabase.serviceKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "magiclink", email }),
+    }).then((r) => r.json(), () => ({}));
+    const token_hash = l.hashed_token ?? l.properties?.hashed_token;
+    const v = token_hash && (await fetch(`${supabase.url}/auth/v1/verify`, {
+      method: "POST",
+      headers: { apikey: supabase.anonKey, "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "magiclink", token_hash }),
+    }).then((r) => r.json(), () => ({})));
+    if (!v?.access_token) throw new Error("Couldn't sign in to the site's bar. Try again in a minute.");
+    barTokens.set(email, { token: v.access_token, exp: Date.now() + (v.expires_in ?? 3600) * 1000 - 120e3 });
+    return v.access_token;
+  }
+  async function bar(inst, path, init = {}) {
+    const res = await fetch(`${inst.url}${path}`, { ...init, headers: { Authorization: `Bearer ${await barToken(inst.email)}`, ...init.headers } });
+    if (init.raw && res.ok) return res;
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw Object.assign(new Error(`${inst.id}: ${body.error ?? `HTTP ${res.status}`}`), { status: res.status });
+    return body;
+  }
+  // A photo for the bar: an https URL (fetched here; no internal hosts) or base64 (optionally a data: URL).
+  async function photo(p) {
+    const MAX = 15 * 1024 * 1024;
+    if (/^https:\/\//i.test(p)) {
+      const h = new URL(p).hostname;
+      if (/^(localhost|[\d.]+|\[.*\])$|\.(internal|flycast|local)$/i.test(h)) throw new Error(`Can't fetch ${h}`);
+      const r = await fetch(p, { redirect: "error", signal: AbortSignal.timeout(20e3) });
+      const type = r.headers.get("content-type") ?? "";
+      if (!r.ok || !type.startsWith("image/") || Number(r.headers.get("content-length") ?? 0) > MAX) throw new Error(`${p} isn't an image we can fetch (HTTP ${r.status}, ${type || "no type"})`);
+      const b = Buffer.from(await r.arrayBuffer());
+      if (b.length > MAX) throw new Error(`${p} is over 15 MB`);
+      return new Blob([b], { type });
+    }
+    const m = p.match(/^data:(image\/[\w.+-]+);base64,/);
+    const b = Buffer.from(m ? p.slice(m[0].length) : p, "base64");
+    if (!b.length || b.length > MAX) throw new Error("A photo must be an https URL or base64 image data under 15 MB");
+    return new Blob([b], { type: m?.[1] ?? "image/jpeg" });
+  }
+  // Wait up to `ms` for a job's reply, then describe where it is.
+  async function reply(inst, job, ms) {
+    for (const end = Date.now() + ms; ; await new Promise((r) => setTimeout(r, 2500))) {
+      const j = await bar(inst, `/jobs/${encodeURIComponent(job)}`).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
+      if (!j) return `Job ${job} isn't tracked any more (finished jobs are kept 15 minutes). Call read_conversation for the reply.`;
+      if (typeof j.result?.reply === "string") {
+        const g = j.result.git ?? {};
+        return [
+          j.result.reply || "(no reply text)",
+          g.changed ? `Git: committed ${g.headSha?.slice(0, 7)}${g.pushed ? ` and pushed to ${g.branch}; the site redeploys from there.` : ", not pushed yet."}` : "Git: no commits.",
+          g.dirty ? "Uncommitted changes are left in the checkout." : null,
+          ...(j.result.images ?? []).map((i) => `Image: ${inst.url}/sites/${inst.siteId}/assets/${i.name}`),
+        ].filter(Boolean).join("\n");
+      }
+      if (j.error || j.status === "error" || j.status === "interrupted") return `The agent stopped: ${j.error?.detail ?? j.status}`;
+      if (Date.now() > end) return `Still working${j.status === "queued" ? " (queued behind another request)" : j.status_line?.detail ? `: ${j.status_line.detail}` : ""}. Call get_reply with site ${inst.id} and job ${job} to keep waiting.`;
+    }
+  }
+
   // ---- tools ----
   function tools(s, req) {
     // Call a /cloud/ route as this user and return its JSON (errors become tool errors).
@@ -185,7 +249,7 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
     const find = async (id) => (await sites()).find((i) => i.id === id) ?? Promise.reject(new Error(`No site ${id}. Call list_sites.`));
 
     const server = new McpServer({ name: "agent-keyboard", version: "1.0.0" }, {
-      instructions: `Agent Keyboard puts a prompt bar on a website; a Claude Code session behind it edits the site's repo and ships. These tools set it up and manage it for the signed-in user, the same as ${BASE}/start and ${BASE}/dashboard. Setup order: connect_cloudflare, list_repos, start_setup, then setup_status until done (it says what the user does at each step). Never ask the user to paste a token, password or code into the chat: those go on ${BASE}/start.`,
+      instructions: `Agent Keyboard puts a prompt bar on a website; a Claude Code session behind it edits the site's repo and ships. These tools set it up and manage it for the signed-in user, the same as ${BASE}/start and ${BASE}/dashboard. To change a site itself, use send_message: it goes to that site's own agent, like typing in its bar (get_reply waits for longer edits; read_conversation shows the history). Setup order: connect_cloudflare, list_repos, start_setup, then setup_status until done (it says what the user does at each step). Never ask the user to paste a token, password or code into the chat: those go on ${BASE}/start.`,
     });
 
     server.registerTool("whoami", { description: "The signed-in Agent Keyboard account: GitHub login, email, Cloudflare connection, number of sites, and any setup in progress.", annotations: { readOnlyHint: true } }, async () => {
@@ -234,6 +298,52 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
     server.registerTool("remove_domain", { description: "Remove a site's custom domain from Cloudflare Pages (its DNS record stays).", inputSchema: { site }, annotations: { destructiveHint: true } }, async ({ site: id }) => {
       await call("POST", `/cloud/instances/${id}/domain-remove`, {});
       return text("Removed. Its DNS record stays; delete it at the DNS provider if it's no longer needed.");
+    });
+    const mine = (id) => load().find((i) => i.id === id && i.email === s.email) ?? Promise.reject(new Error(`No site ${id}. Call list_sites.`));
+    server.registerTool("send_message", {
+      description: "Ask a site's own agent (the Claude Code session behind its bar) to change the site, the same as typing in the bar: it edits the repo, commits and pushes, and the site redeploys. Shares the bar's conversation. Waits about 45 seconds; if the agent isn't done, returns a job id for get_reply.",
+      inputSchema: {
+        site,
+        message: z.string().min(1).max(20000).describe("The request, in the user's words."),
+        photos: z.array(z.string()).max(4).optional().describe("Images for the agent (screenshots, mockups): https URLs, or base64 image data (a data:image/...;base64, URL or raw base64)."),
+      },
+    }, async ({ site: id, message, photos = [] }) => {
+      const inst = await mine(id);
+      const attachmentIds = [];
+      for (const p of photos) {
+        const form = new FormData();
+        form.append("photo", await photo(p), "photo");
+        attachmentIds.push((await bar(inst, `/sites/${inst.siteId}/uploads`, { method: "POST", body: form })).id);
+      }
+      // The response is the job's SSE stream; take the job id and detach (the job keeps running).
+      const res = await bar(inst, `/sites/${inst.siteId}/messages`, {
+        method: "POST", raw: true, headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: message, page: "/", attachmentIds, idemKey: randomUUID() }),
+      });
+      const rd = res.body.getReader(), dec = new TextDecoder();
+      let buf = "", job;
+      while (!job) {
+        const { value, done } = await rd.read();
+        if (done) break;
+        job = (buf += dec.decode(value, { stream: true })).match(/event: job\ndata: (.*)\n/)?.[1];
+      }
+      rd.cancel().catch(() => {});
+      if (!job) throw new Error(`${id}: the bar didn't start a job`);
+      return text(await reply(inst, JSON.parse(job).job_id, 45e3));
+    });
+    server.registerTool("get_reply", {
+      description: "Keep waiting (about 45 seconds) for the reply to a send_message that was still working.",
+      inputSchema: { site, job: z.string().regex(/^[\w-]+$/).describe("The job id send_message returned.") },
+      annotations: { readOnlyHint: true },
+    }, async ({ site: id, job }) => text(await reply(await mine(id), job, 45e3)));
+    server.registerTool("read_conversation", {
+      description: "The recent messages between the user and a site's agent (from the bar or send_message), oldest first.",
+      inputSchema: { site, limit: z.number().int().min(1).max(50).optional().describe("How many messages (default 20).") },
+      annotations: { readOnlyHint: true },
+    }, async ({ site: id, limit = 20 }) => {
+      const inst = await mine(id);
+      const { messages } = await bar(inst, `/sites/${inst.siteId}/conversation?limit=${limit}`);
+      return text(messages.filter((m) => m.text).map((m) => `${m.role}${m.ts ? ` (${m.ts.slice(0, 16).replace("T", " ")})` : ""}: ${m.text}`).join("\n\n") || "No messages yet.");
     });
     server.registerTool("open_site", { description: "A link that opens the site already signed in to the bar (in a browser signed in at agentkeyboard.com).", inputSchema: { site }, annotations: { readOnlyHint: true } }, async ({ site: id }) => text(`Open ${open((await find(id)).id)} to use the bar on it.`));
     return server;
