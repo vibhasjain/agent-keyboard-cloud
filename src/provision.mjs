@@ -33,7 +33,7 @@ function stagingMemory(url, staging, live) {
   return `# Staging and live
 
 This site is staged. Your pushes go to the \`${staging}\` branch, which this Sprite serves as a preview at ${url}. Nothing you push there reaches the live site.
-If the repo has an npm `dev` script, the preview runs it (hot reload); after changing dependencies, run `npm install` in the checkout.
+If the repo has an npm \`dev\` script, the preview runs it (hot reload); after changing dependencies, run \`npm install\` in the checkout.
 
 The live site deploys from \`${live}\` (wherever the owner's host builds it). When the owner asks to deploy, publish, ship or "go live":
 1. Make sure everything is committed and pushed to \`${staging}\`.
