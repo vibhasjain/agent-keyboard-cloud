@@ -27,7 +27,7 @@ const api = async (path, body) => {
 const STEPS = [["fly", "Connect Fly.io"], ["claude", "Sign in to Claude"], ["install", "Install Agent Keyboard"], ["done", "Done"]];
 const order = { fly: 0, sprite: 0, claude: 1, connector: 2, install: 2, done: 3 };
 const steps = (s) => `<ol class="steps">${STEPS.map(([k, t], i) => `<li class="${i < order[s] || s === "done" ? "ok" : i === order[s] ? "now" : ""}">${t}</li>`).join("")}</ol>`;
-let timer, lastStep;
+let timer, lastStep, copied = "";
 
 async function render() {
   clearTimeout(timer);
@@ -82,10 +82,13 @@ function show(f) {
     return;
   }
   if (f.step === "fly" && f.userCode) {
-    $app.innerHTML = `<p><b>2. Connect Fly.io.</b> Open Fly and enter this code. If you don't have a Fly account yet, you'll make one there. This page continues by itself.</p>
-      <div class="code">${esc(f.userCode)}</div><div class="row"><button class="btn ghost" id="copy">Copy code</button><a class="btn" href="${esc(f.verifyUrl)}" target="_blank" rel="noopener">Open fly.io</a></div>${steps(f.step)}`;
-    const c = document.getElementById("copy");
-    c.onclick = () => navigator.clipboard.writeText(f.userCode).then(() => (c.textContent = "Copied"));
+    $app.innerHTML = `<p><b>2. Connect Fly.io.</b> The button copies this code and opens Fly: sign in there, then paste it when Fly asks. If you don't have a Fly account yet, you'll make one there. This page continues by itself.</p>
+      <div class="code">${esc(f.userCode)}</div><div class="row"><a class="btn" id="open" href="${esc(f.verifyUrl)}" target="_blank" rel="noopener">Copy code &amp; open Fly.io</a></div><p class="small" id="copied" role="status">${esc(copied)}</p>${steps(f.step)}`;
+    document.getElementById("open").onclick = () =>
+      navigator.clipboard.writeText(f.userCode).then(
+        () => (document.getElementById("copied").textContent = copied = `Copied ${f.userCode}. Paste it on Fly when it asks for the code.`),
+        () => (document.getElementById("copied").textContent = copied = `Couldn't copy automatically. Type ${f.userCode} on Fly when it asks for the code.`),
+      );
   } else if (f.step === "claude") {
     $app.innerHTML = `<p><b>3. Sign in to Claude.</b> Approve on claude.ai, then paste the code it shows you here. The token goes into a connector in your own Fly account.</p>
       ${f.error ? `<p class="err">${esc(f.error)}</p>` : ""}
