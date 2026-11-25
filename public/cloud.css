@@ -18,6 +18,8 @@ p{ color:var(--ink-2); margin-bottom:14px; } .small{ font-size:13px; color:var(-
 .btn:disabled{ opacity:.5; cursor:default; }
 label{ display:block; font-size:13px; font-weight:500; color:var(--ink-2); margin:14px 0 6px; }
 input,select{ width:100%; background:var(--bg); color:var(--ink); border:1px solid var(--rule-2); border-radius:10px; padding:11px 12px; font:16px var(--sans); }
+/* an input beside its button (Invite, Add domain) shares the row */
+.row > input{ flex:1; width:auto; min-width:0; }
 input:focus,select:focus{ outline:2px solid rgba(255,184,107,.5); outline-offset:1px; }
 .code{ font:500 clamp(34px,9vw,52px)/1 var(--mono); letter-spacing:.14em; color:var(--amber); margin:10px 0 18px; }
 pre{ font:13px/1.5 var(--mono); white-space:pre-wrap; word-break:break-all; background:var(--bg); border:1px solid var(--rule); border-radius:10px; padding:12px; margin:10px 0; color:var(--ink); }
@@ -39,5 +41,5 @@ pre{ font:13px/1.5 var(--mono); white-space:pre-wrap; word-break:break-all; back
 @media (prefers-reduced-motion:reduce){ .switch,.switch::after{ transition:none; } }
 .head h2{ display:flex; align-items:center; gap:6px; min-width:0; } .head h2 a{ color:var(--ink); overflow-wrap:anywhere; } .head h2 a:hover{ color:var(--amber); }
 .dot.bad{ background:var(--err); } .note{ margin:0 0 4px; } .acct{ margin-top:22px; }
-.danger{ margin-left:auto; border:0; background:none; padding:11px 4px; font:500 15px var(--sans); color:var(--err); cursor:pointer; display:inline-flex; align-items:center; } .danger:hover{ opacity:.8; } .danger:disabled{ opacity:.5; cursor:default; }
+.danger{ gap:6px; border:0; background:none; padding:11px 4px; font:500 15px var(--sans); color:var(--err); cursor:pointer; display:inline-flex; align-items:center; } .danger:hover{ opacity:.8; } .danger:disabled{ opacity:.5; cursor:default; }
 .more{ margin-top:12px; } .more summary{ font-size:13px; color:var(--ink-3); cursor:pointer; width:max-content; } .more summary:hover{ color:var(--ink-2); }
