@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Get Agent Keyboard</title>
+<link rel="icon" href="https://agentkeyboard.com/favicon.png">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/cloud/cloud.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><a class="brand" href="https://agentkeyboard.com"><img src="https://agentkeyboard.com/typewriter-mark.png" alt=""><b>Agent Keyboard</b></a><a href="/dashboard">Dashboard</a></div>
+  <h1>Your own <em>Agent Keyboard</em>, running on a Fly.io Sprite.</h1>
+  <p>Four steps, no terminal. Everything runs in <b>your</b> Fly account with <b>your</b> Claude subscription. We only set it up.</p>
+  <div id="app" class="card" aria-live="polite"><p>Loading…</p></div>
+  <p class="small">What we keep: your GitHub email and login, the repo you pick, and an encrypted Fly credential that lets the dashboard restart, update or delete your Sprite. You can revoke it any time in your Fly dashboard under Tokens ("Agent (auth.md)"). Your Claude token goes into a connector in your Fly account and never reaches us. A light instance costs about $1/month on Fly. New Fly accounts get $1 of credit for 7 days, then need a card.</p>
+</div>
+<script>
+const $app = document.getElementById("app");
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const api = async (path, body) => {
+  const r = await fetch("/cloud/" + path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || "Something went wrong (" + r.status + ")");
+  return d;
+};
+const STEPS = [["fly", "Connect Fly.io"], ["claude", "Sign in to Claude"], ["install", "Install Agent Keyboard"], ["done", "Done"]];
+const order = { fly: 0, sprite: 0, claude: 1, connector: 2, install: 2, done: 3 };
+const steps = (s) => `<ol class="steps">${STEPS.map(([k, t], i) => `<li class="${i < order[s] || s === "done" ? "ok" : i === order[s] ? "now" : ""}">${t}</li>`).join("")}</ol>`;
+let timer, lastStep;
+
+async function render() {
+  clearTimeout(timer);
+  let me;
+  try { me = await api("me"); } catch (e) { $app.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  if (!me.signedIn || !me.github) {
+    $app.innerHTML = `<p><b>1. Sign in with GitHub.</b> You'll install the Agent Keyboard app on your site's repo (or on nothing, if you don't have a site yet).</p>
+      ${me.app === false ? `<p class="err">Sign-up isn't open yet.</p>` : `<a class="btn" href="/cloud/github/login?next=start">Sign in with GitHub</a>`}`;
+    return;
+  }
+  if (me.instance) {
+    $app.innerHTML = `<p>You already have an instance: <a href="${esc(me.instance.url)}">${esc(me.instance.url)}</a>.</p><a class="btn" href="/dashboard">Open the dashboard</a>`;
+    return;
+  }
+  const f = me.flow;
+  if (!f || f.step === "error" && lastStep === undefined) return pick(me, f?.error);
+  show(f);
+}
+
+async function pick(me, error) {
+  let repos = [];
+  try { repos = (await api("repos")).repos; } catch (e) { error = e.message; }
+  $app.innerHTML = `<p>Signed in as <b>${esc(me.login)}</b> (${esc(me.email)}).</p>
+    ${error ? `<p class="err">${esc(error)}</p>` : ""}
+    <form id="f">
+      <label for="repo">Your site's repo</label>
+      <select id="repo">${repos.map((r) => `<option value="${esc(r.full_name)}" data-home="${esc(r.homepage)}">${esc(r.full_name)}</option>`).join("")}<option value="">I don't have a site yet</option></select>
+      <p class="small">Missing a repo? <a href="${esc(me.installUrl)}">Give Agent Keyboard access to it</a>.</p>
+      <div id="has"><label for="domain">Its domain</label><input id="domain" placeholder="example.com" autocomplete="off"></div>
+      <div id="none" hidden><label for="name">Name for your new site</label><input id="name" value="my-site" autocomplete="off">
+        <p class="small">We'll create the repo on your GitHub with a starter page, and your Sprite will host it.</p></div>
+      <div class="row"><button class="btn">Continue</button></div>
+    </form>${steps("fly")}`;
+  const sel = document.getElementById("repo"), dom = document.getElementById("domain");
+  const sync = () => {
+    document.getElementById("has").hidden = !sel.value;
+    document.getElementById("none").hidden = !!sel.value;
+    dom.value = (sel.selectedOptions[0].dataset.home || "").replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  };
+  sel.onchange = sync; sync();
+  document.getElementById("f").onsubmit = async (e) => {
+    e.preventDefault();
+    e.submitter.disabled = true;
+    try { lastStep = null; show(await api("start", sel.value ? { repo: sel.value, domain: dom.value } : { name: document.getElementById("name").value })); }
+    catch (err) { pick(me, err.message); }
+  };
+}
+
+function show(f) {
+  lastStep = f.step;
+  if (f.step === "error") {
+    $app.innerHTML = `<p class="err">${esc(f.error)}</p><button class="btn" id="again">Start again</button>`;
+    document.getElementById("again").onclick = () => { lastStep = undefined; render(); };
+    return;
+  }
+  if (f.step === "fly" && f.userCode) {
+    $app.innerHTML = `<p><b>2. Connect Fly.io.</b> Open Fly and enter this code. If you don't have a Fly account yet, you'll make one there. This page continues by itself.</p>
+      <div class="code">${esc(f.userCode)}</div><a class="btn" href="${esc(f.verifyUrl)}" target="_blank" rel="noopener">Open fly.io</a>${steps(f.step)}`;
+  } else if (f.step === "claude") {
+    $app.innerHTML = `<p><b>3. Sign in to Claude.</b> Approve on claude.ai, then paste the code it shows you here. The token goes into a connector in your own Fly account.</p>
+      ${f.error ? `<p class="err">${esc(f.error)}</p>` : ""}
+      ${f.loginUrl ? `<a class="btn" href="${esc(f.loginUrl)}" target="_blank" rel="noopener">Sign in to Claude</a>
+      <form id="c"><label for="code">Code from Claude</label><input id="code" autocomplete="off" required><div class="row"><button class="btn">Continue</button></div></form>` : `<p>Getting a fresh sign-in link…</p>`}
+      ${steps(f.step)}`;
+    const form = document.getElementById("c");
+    if (form) {
+      form.onsubmit = async (e) => {
+        e.preventDefault();
+        e.submitter.disabled = true;
+        try { show(await api("start/claude", { code: document.getElementById("code").value })); }
+        catch (err) { form.insertAdjacentHTML("afterbegin", `<p class="err">${esc(err.message)}</p>`); e.submitter.disabled = false; }
+      };
+      return; // don't poll while the user is typing; a submit shows the next step
+    }
+  } else if (f.step === "done") {
+    const r = f.result;
+    $app.innerHTML = r.starter
+      ? `<p><b>Done.</b> Your site is live with the bar on it, at <a href="${esc(r.url)}">${esc(r.url)}</a>. Check your email for a link to set the bar's password, then tap the bar and tell it what to build.</p><a class="btn" href="${esc(r.url)}">Open your site</a>${steps("done")}`
+      : `<p><b>Done.</b> Add this tag to your site's pages (before <code>&lt;/body&gt;</code>), then push. Check your email for a link to set the bar's password.</p><pre>${esc(r.tag)}</pre>
+         <div class="row"><button class="btn" id="copy">Copy</button><a class="btn ghost" href="/dashboard">Dashboard</a></div>${steps("done")}`;
+    const c = document.getElementById("copy");
+    if (c) c.onclick = () => navigator.clipboard.writeText(r.tag).then(() => (c.textContent = "Copied"));
+    return;
+  } else {
+    $app.innerHTML = `<p>${esc(f.detail || "Working…")}</p>${steps(f.step)}<p class="small">This takes about a minute.</p>`;
+  }
+  timer = setTimeout(poll, 2500);
+}
+async function poll() {
+  try { const f = await api("start"); f.step ? show(f) : render(); } catch { timer = setTimeout(poll, 5000); }
+}
+render();
+</script>
+</body>
+</html>

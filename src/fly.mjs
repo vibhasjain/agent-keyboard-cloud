@@ -71,6 +71,7 @@ export function sprites({ sprites_api, sprites_token }) {
     remove: (name) => call("DELETE", `/sprites/${name}`),
     setPublic: (name) => call("PUT", `/sprites/${name}`, { url_settings: { auth: "public" } }),
     connections: () => call("GET", "/oauth/connections").then((d) => d.connections ?? d.data ?? d),
+    removeConnection: (id) => call("DELETE", `/oauth/connections/${id}`),
     setPolicy: (id, namePrefix) => call("PUT", `/oauth/connections/${id}`, { access_policy: { name_prefix: namePrefix } }),
     /** Run `bash -lc script` on the Sprite. Returns { out, code }; throws on a non-zero exit. */
     async exec(name, script, { timeoutMs = 15 * 60_000 } = {}) {

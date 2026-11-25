@@ -7,8 +7,17 @@ import { mint, sprites } from "./fly.mjs";
 import { addDeployKey, createRepo, getRepo } from "./github.mjs";
 
 const INSTALL_URL = "https://raw.githubusercontent.com/vibhasjain/agent-keyboard/{ref}/server/sprite-install.sh";
-const slug = (s) => s.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "site";
 const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
+
+export const slug = (s) => s.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "site";
+
+/** Create the Sprite `name` unless it exists, make its URL public, return the URL. */
+export async function ensureSprite(api, name) {
+  let sprite = await api.get(name).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
+  sprite ??= await api.create(name);
+  await api.setPublic(name);
+  return sprite.url.replace(/\/$/, "");
+}
 
 export function scriptTag(spriteUrl, siteId) {
   return `<script src="${spriteUrl}/widget.js" data-site="${siteId}" defer></script>`;
@@ -55,6 +64,7 @@ ${tag}
  */
 export async function provision(opts, progress = () => {}) {
   const { email, githubToken, supabase } = opts;
+  const userToken = opts.userToken ?? githubToken; // creating a repo needs a user token
   const ref = opts.ref ?? "main";
   const starter = !opts.repo;
 
@@ -75,10 +85,7 @@ export async function provision(opts, progress = () => {}) {
   if (!name.startsWith(conn.access_policy?.name_prefix ?? "\0")) await api.setPolicy(conn.id, "ak-");
 
   progress(`sprite: creating ${name}`);
-  let sprite = await api.get(name).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
-  sprite ??= await api.create(name);
-  await api.setPublic(name);
-  const url = sprite.url.replace(/\/$/, "");
+  const url = await ensureSprite(api, name);
   // A starter site lives on the Sprite; a brought site is wherever its homepage is.
   const homepage = repo?.homepage && (/^https?:\/\//.test(repo.homepage) ? repo.homepage : `https://${repo.homepage}`);
   const domain = starter ? new URL(url).host : opts.domain ?? (homepage && new URL(homepage).host);
@@ -87,7 +94,7 @@ export async function provision(opts, progress = () => {}) {
   if (starter) {
     progress("github: creating the starter repo");
     const repoName = opts.name ?? "my-site";
-    repo = await createRepo(githubToken, repoName, "My site, built with Agent Keyboard", {
+    repo = await createRepo(userToken, repoName, "My site, built with Agent Keyboard", {
       "index.html": starterIndex(repoName, scriptTag(url, siteId)),
     });
   }
@@ -130,7 +137,7 @@ export async function provision(opts, progress = () => {}) {
   progress("bar: sign-in account");
   await ensureBarUser(supabase, email);
 
-  return { sprite: name, url, siteId, repo: repo.full_name, tag: scriptTag(url, siteId), starter };
+  return { sprite: name, url, siteId, repo: repo.full_name, domain, connection: conn.id, tag: scriptTag(url, siteId), starter };
 }
 
 /** The bar signs in against our Supabase: invite the email unless it already has an account. */

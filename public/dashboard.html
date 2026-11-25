@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Keyboard dashboard</title>
+<link rel="icon" href="https://agentkeyboard.com/favicon.png">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/cloud/cloud.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><a class="brand" href="https://agentkeyboard.com"><img src="https://agentkeyboard.com/typewriter-mark.png" alt=""><b>Agent Keyboard</b></a><span id="who"></span></div>
+  <h1>Your instances</h1>
+  <div id="app" aria-live="polite"><p>Loading…</p></div>
+</div>
+<script>
+const $app = document.getElementById("app");
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const api = async (path, body) => {
+  const r = await fetch("/cloud/" + path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || "Something went wrong (" + r.status + ")");
+  return d;
+};
+const LABEL = { restart: "Restarting…", update: "Updating… (about a minute)", delete: "Deleting…" };
+
+async function render(note) {
+  const me = await api("me").catch(() => ({}));
+  if (!me.signedIn) {
+    $app.innerHTML = `<div class="card"><p>Sign in with the GitHub account you set up with.</p><a class="btn" href="/cloud/github/login?next=dashboard">Sign in with GitHub</a></div>`;
+    return;
+  }
+  document.getElementById("who").innerHTML = `${esc(me.login)} · <a href="#" id="out">Sign out</a>`;
+  document.getElementById("out").onclick = (e) => { e.preventDefault(); api("logout", {}).then(() => location.reload()); };
+  let list;
+  try { list = (await api("instances")).instances; } catch (e) { $app.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  if (!list.length) { $app.innerHTML = `<div class="card"><p>No instances yet.</p><a class="btn" href="/start">Get started</a></div>`; return; }
+  $app.innerHTML = (note ? `<p>${esc(note)}</p>` : "") + list.map((i) => `
+    <div class="card inst" data-id="${esc(i.id)}">
+      <h2><span class="dot ${["running", "warm", "cold"].includes(i.status) ? "on" : ""}"></span>${esc(i.siteId)}</h2>
+      <div class="meta">Sprite <b>${esc(i.id)}</b> · ${esc(i.status)} · version ${esc(i.ref)} · since ${esc(i.createdAt.slice(0, 10))}</div>
+      <div class="meta">Repo <a href="https://github.com/${esc(i.repo)}">${esc(i.repo)}</a> · ${i.starter ? `site <a href="${esc(i.url)}">${esc(i.url)}</a>` : `site <a href="https://${esc(i.domain)}">${esc(i.domain)}</a>`}</div>
+      ${i.starter ? "" : `<pre>${esc(i.tag)}</pre>`}
+      ${i.status === "reconnect Fly" ? `<p class="err">Our access to your Fly account expired or was revoked. Delete and set up again to reconnect.</p>` : ""}
+      <div class="row"><button class="btn ghost" data-a="restart">Restart</button><button class="btn ghost" data-a="update">Update</button><button class="btn ghost" data-a="delete">Delete</button></div>
+    </div>`).join("");
+  $app.querySelectorAll("button[data-a]").forEach((b) => (b.onclick = async () => {
+    const id = b.closest(".inst").dataset.id, a = b.dataset.a;
+    if (a === "delete" && !confirm(`Delete ${id}? This removes the Sprite and its Claude connector from your Fly account. Your repo stays.`)) return;
+    b.closest(".row").querySelectorAll("button").forEach((x) => (x.disabled = true));
+    b.textContent = LABEL[a];
+    try { await api(`instances/${id}/${a}`, {}); render(a === "delete" ? `Deleted ${id}.` : `${id}: ${a} done.`); }
+    catch (e) { render(e.message); }
+  }));
+}
+render();
+</script>
+</body>
+</html>

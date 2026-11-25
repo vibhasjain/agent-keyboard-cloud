@@ -1,0 +1,25 @@
+app = "agent-keyboard-cloud"
+primary_region = "iad"
+
+[env]
+  PUBLIC_URL = "https://agentkeyboard.com"
+
+[mounts]
+  source = "cloud_data"
+  destination = "/data"
+
+# Start flows live in memory: keep one machine up.
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  min_machines_running = 1
+
+[[http_service.checks]]
+  path = "/cloud/health"
+  interval = "30s"
+  timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
