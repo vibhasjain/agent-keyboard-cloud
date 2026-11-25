@@ -71,7 +71,7 @@ async function render(note) {
   const me = await api("me").catch(() => ({}));
   if (!me.signedIn) return location.replace("/signin");
   listen(me.events);
-  document.getElementById("who").innerHTML = `<details class="acct-menu"><summary aria-label="Account: ${esc(me.login)}"><span aria-hidden="true">${esc(me.login.slice(0, 1).toUpperCase())}</span><img src="https://github.com/${encodeURIComponent(me.login)}.png?size=64" alt="" onerror="this.remove()"></summary><div><span>Signed in as ${esc(me.login)}</span><button type="button" id="out">Sign out</button></div></details>`;
+  document.getElementById("who").innerHTML = `<details class="acct-menu"><summary aria-label="Account: ${esc(me.login)}"><span aria-hidden="true">${esc(me.login.slice(0, 1).toUpperCase())}</span><img src="https://github.com/${encodeURIComponent(me.login)}.png?size=64" alt="" onerror="this.remove()"></summary><div><span>Signed in as ${esc(me.login)}</span><a href="/start">Add a site</a><button type="button" id="out">Sign out</button></div></details>`;
   document.getElementById("out").onclick = () => api("logout", {}).then(() => location.reload());
   let list;
   let latest;

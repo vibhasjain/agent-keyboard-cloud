@@ -34,9 +34,9 @@ async function render() {
   clearTimeout(timer);
   let me;
   try { me = await api("me"); } catch (e) { $app.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
-  // Signed in: their GitHub avatar opens the account menu (as on the dashboard), with Dashboard for returning users.
+  // Signed in: their GitHub avatar opens the account menu (as on the dashboard), with Your sites for returning users.
   if (me.signedIn && !document.querySelector(".acct-menu")) {
-    document.querySelector(".top").insertAdjacentHTML("beforeend", `<details class="acct-menu"><summary aria-label="Account: ${esc(me.login)}"><span aria-hidden="true">${esc(me.login.slice(0, 1).toUpperCase())}</span><img src="https://github.com/${encodeURIComponent(me.login)}.png?size=64" alt="" onerror="this.remove()"></summary><div><span>Signed in as ${esc(me.login)}</span>${me.instance ? `<a href="/dashboard">Dashboard</a>` : ""}<button type="button" id="out">Sign out</button></div></details>`);
+    document.querySelector(".top").insertAdjacentHTML("beforeend", `<details class="acct-menu"><summary aria-label="Account: ${esc(me.login)}"><span aria-hidden="true">${esc(me.login.slice(0, 1).toUpperCase())}</span><img src="https://github.com/${encodeURIComponent(me.login)}.png?size=64" alt="" onerror="this.remove()"></summary><div><span>Signed in as ${esc(me.login)}</span>${me.instance ? `<a href="/dashboard">Your sites</a>` : ""}<button type="button" id="out">Sign out</button></div></details>`);
     document.getElementById("out").onclick = () => api("logout", {}).then(() => location.reload());
   }
   // Already connected to Claude: point there instead of offering the connector again.
