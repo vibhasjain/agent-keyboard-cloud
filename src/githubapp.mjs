@@ -45,7 +45,7 @@ export function manifest(base) {
     request_oauth_on_install: true,
     public: true,
     hook_attributes: { url: `${base}/cloud/github/hook`, active: false },
-    default_permissions: { administration: "write", contents: "write", metadata: "read", email_addresses: "read" },
+    default_permissions: { administration: "write", contents: "write", metadata: "read", emails: "read" },
   };
 }
 
