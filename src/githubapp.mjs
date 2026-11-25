@@ -68,7 +68,13 @@ export async function signIn(code) {
   const email = (emails.find((e) => e.primary && e.verified) ?? emails.find((e) => e.verified))?.email;
   if (!email) throw new Error("your GitHub account has no verified email");
   const installations = inst.installations.filter((i) => i.app_id === Number(app.id)).map((i) => i.id);
-  return { token, expiresIn: t.expires_in, login: user.login, email: email.toLowerCase(), installations };
+  return { token, expiresIn: t.expires_in, refresh: t.refresh_token, refreshExpiresIn: t.refresh_token_expires_in, login: user.login, email: email.toLowerCase(), installations };
+}
+
+/** Swap a refresh token for a new user token (GitHub App user tokens expire after 8 h; the refresh token after 6 months). */
+export async function refreshUser(refresh) {
+  const t = await gh(null, "POST", "https://github.com/login/oauth/access_token", { client_id: app.client_id, client_secret: app.client_secret, grant_type: "refresh_token", refresh_token: refresh });
+  return { token: t.access_token, expiresIn: t.expires_in, refresh: t.refresh_token, refreshExpiresIn: t.refresh_token_expires_in };
 }
 
 /** The page where GitHub asks `owner` to accept the App's new permissions (straight to it: on mobile the "Review request" button is off-screen). */

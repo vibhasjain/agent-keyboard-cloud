@@ -11,7 +11,8 @@ import { createServer } from "node:http";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { claudeLoginFinish, claudeLoginStart } from "./claude.mjs";
 import { mint, pollClaim, register, sprites } from "./fly.mjs";
-import { appReady, authorizeUrl, createdFromManifest, installationPage, installUrl, loadApp, manifest, signIn, userRepos } from "./githubapp.mjs";
+import { appReady, authorizeUrl, createdFromManifest, installationPage, installUrl, loadApp, manifest, refreshUser, signIn, userRepos } from "./githubapp.mjs";
+import { mcp } from "./mcp.mjs";
 import { addTag, getRepo, putSecret, putVariable, writeFile } from "./github.mjs";
 import { TOKEN_URL, WORKFLOW, addPagesDomain, cnameOf, ensureProject, findZone, isApex, pagesDomain, pagesMemory, pointDns, removePagesDomain, verify } from "./cloudflare.mjs";
 import { ensureSprite, provision, slug, spriteName } from "./provision.mjs";
@@ -74,6 +75,15 @@ let cfs;
 try { cfs = new Map(Object.entries(existsSync(CF) ? JSON.parse(open(readFileSync(CF, "utf8"))) : {})); } catch { cfs = new Map(); }
 const saveCfs = () => writeFileSync(CF, seal(JSON.stringify(Object.fromEntries(cfs))), { mode: 0o600 });
 const ghUser = (login) => { const u = users.get(login); return u && u.exp > Date.now() ? u : null; };
+const keep = (u) => ({ token: u.token, exp: Date.now() + (u.expiresIn ?? 8 * 3600) * 1000 - 60e3, refresh: u.refresh, refreshExp: u.refresh && Date.now() + (u.refreshExpiresIn ?? 15552000) * 1000 - 60e3 });
+// An expired GitHub user token is swapped for a new one with its refresh token, so sign-ins (and MCP connectors) last.
+const refreshing = new Map();
+async function fresh(login) {
+  const u = users.get(login);
+  if (!u || u.exp > Date.now() || !u.refresh || !(u.refreshExp > Date.now())) return;
+  if (!refreshing.has(login)) refreshing.set(login, refreshUser(u.refresh).then((t) => { users.set(login, { ...u, ...keep(t) }); saveUsers(); }, (e) => console.error("refresh", login, e.message)).finally(() => refreshing.delete(login)));
+  await refreshing.get(login);
+}
 const flows = new Map(); // email → the start flow in progress
 const states = new Map(); // oauth state → "start" | "dashboard"
 
@@ -131,7 +141,7 @@ async function runProvision(flow, code) {
     );
     // A brought site gets the tag committed to its index.html; if there isn't one, the page shows it to paste.
     const tagPath = r.starter || r.staging ? r.tagPath : await addTag(user.token, r.repo, r.tag).catch(() => null);
-    upsert({ id: r.sprite, tagPath, email: flow.email, login: flow.login, siteId: r.siteId, repo: r.repo, domain: r.domain, url: r.url, connection: r.connection, starter: r.starter, staging: r.staging, tag: r.tag, ref: REF, createdAt: new Date().toISOString(), assertion: seal(flow.assertion) });
+    upsert({ id: r.sprite, tagPath, email: flow.email, login: flow.login, siteId: r.siteId, repo: r.repo, domain: r.domain, url: r.url, connection: r.connection, starter: r.starter, staging: r.staging, tag: r.tag, via: flow.via, ref: REF, createdAt: new Date().toISOString(), assertion: seal(flow.assertion) });
     flow.assertion = null;
     // Every site is hosted on Cloudflare Pages (connected before the flow starts).
     flow.detail = "hosting your site on Cloudflare Pages";
@@ -304,7 +314,8 @@ const routes = {
   "GET /cloud/github/login": (q, req, res) => {
     if (!appReady()) return send(res, 503, { error: "GitHub App not set up yet" });
     const state = randomBytes(16).toString("hex");
-    states.set(state, q.get("next") === "dashboard" ? "dashboard" : "start");
+    const n = q.get("next") ?? "";
+    states.set(state, n === "dashboard" || n.startsWith("/oauth/authorize?") ? n : "start");
     redirect(res, authorizeUrl(state));
   },
   // OAuth callback, and the App's post-install redirect (which also carries a code).
@@ -327,7 +338,7 @@ const routes = {
       return redirect(res, `/${next}`);
     }
     const u = await signIn(q.get("code"));
-    users.set(u.login, { token: u.token, installations: u.installations, exp: Date.now() + (u.expiresIn ?? 8 * 3600) * 1000 - 60e3 });
+    users.set(u.login, { installations: u.installations, ...keep(u) });
     saveUsers();
     setSession(res, { login: u.login, email: u.email });
     if (update) retry(u.email, u.token);
@@ -336,7 +347,7 @@ const routes = {
       states.set(state, "start");
       return redirect(res, installUrl(state));
     }
-    redirect(res, `/${next}`);
+    redirect(res, next.startsWith("/") ? next : `/${next}`);
   },
   "POST /cloud/logout": (q, req, res, s) => {
     if (s && users.delete(s.login)) saveUsers();
@@ -370,7 +381,7 @@ const routes = {
     } else {
       name = slug(String(b.name ?? "my-site"));
     }
-    const flow = { email: s.email, login: s.login, repo, domain, name, sprite: spriteName(slug(repo ? repo.split("/")[1] : name)) };
+    const flow = { email: s.email, login: s.login, repo, domain, name, via: b.via === "mcp" ? "mcp" : undefined, sprite: spriteName(slug(repo ? repo.split("/")[1] : name)) };
     if (load().some((i) => i.id === flow.sprite)) return send(res, 409, { error: `You already have ${flow.sprite}. Manage it from the dashboard, or pick another repo or name.` });
     step(flow, "fly", { detail: "registering with Fly" });
     flows.set(s.email, flow);
@@ -409,10 +420,8 @@ const routes = {
   },
 };
 
-createServer(async (req, res) => {
-  const u = new URL(req.url, BASE);
-  const s = session(req);
-  try {
+// Every page and /cloud/ API route. The MCP server calls this too, with the session its access token stands for.
+async function dispatch(req, res, u, s, b) {
     // Open the site already signed in to the bar: a single-use magic-link token the widget
     // redeems from #ak_handoff= (the same handoff sandboxes use).
     const o = u.pathname.match(/^\/cloud\/open\/([\w-]+)$/);
@@ -432,7 +441,6 @@ createServer(async (req, res) => {
     }
     const m = u.pathname.match(/^\/cloud\/instances\/([\w-]+)\/(restart|update|delete|tag|pages|domain|domain-remove)$/);
     if (req.method === "POST" && m) {
-      const b = await body(req);
       const inst = s && load().find((i) => i.id === m[1] && i.email === s.email);
       if (!inst) return send(res, 404, { error: "No such instance" });
       if (m[2] === "tag") {
@@ -473,7 +481,17 @@ createServer(async (req, res) => {
     }
     const h = routes[`${req.method} ${u.pathname.replace(/\/$/, "") || "/"}`];
     if (!h) return send(res, 404, { error: "not found" });
-    await h(u.searchParams, req, res, s, req.method === "POST" ? await body(req) : null);
+    await h(u.searchParams, req, res, s, b);
+}
+
+const mcpServer = mcp({ BASE, DATA, seal, open, session, ghUser, fresh, dispatch, send, redirect, mac });
+createServer(async (req, res) => {
+  const u = new URL(req.url, BASE);
+  const s = session(req);
+  try {
+    if (s) await fresh(s.login);
+    if (await mcpServer(req, res, u, s)) return;
+    await dispatch(req, res, u, s, req.method === "POST" ? await body(req) : null);
   } catch (e) {
     console.error(req.method, u.pathname, e.message);
     if (!res.headersSent) send(res, e.code >= 400 && e.code < 600 ? e.code : 500, { error: e.message });
