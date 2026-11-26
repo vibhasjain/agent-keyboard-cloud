@@ -31,7 +31,7 @@ const team = (i) => `<form class="team"><label for="tm-${esc(i.id)}">Teammates</
 // Cloudflare Pages hosting (spec #13): where the site is served, its previews and sandboxes.
 function hosting(i, me) {
   const p = i.pages ?? {};
-  if (p.state === "live") return `${p.staging ? `<div class="meta">Live at <a href="${esc(p.live)}" target="_blank" rel="noopener">${esc(p.live.replace("https://", ""))}</a></div>` : ""}${domain(i)}${i.mail && i.mail.status !== "error" ? mail(i, me) : ""}`;
+  if (p.state === "live") return `${p.staging ? `<div class="meta">Live at <a href="${esc(p.live)}" target="_blank" rel="noopener">${esc(p.live.replace("https://", ""))}</a></div>` : ""}${domain(i)}`;
   if (p.state === "setting up") return `<div class="meta">Cloudflare Pages: ${esc(p.detail || "setting up")}…</div>`;
   const err = p.state === "error" ? `<p class="err">${esc(p.error)}</p>${p.permsUrl ? `<div class="row"><a class="btn ghost" href="${esc(p.permsUrl)}" target="_blank" rel="noopener">Review permissions on GitHub</a></div>` : ""}` : "";
   return me.cloudflare ? `${err}<div class="meta">Not on Cloudflare Pages yet.</div>` : "";
@@ -64,17 +64,16 @@ function domain(i) {
   else how = `At your DNS provider, add this record:</div><pre>CNAME  ${esc(d.host)}  →  ${esc(sub)}</pre><div class="meta">${d.now === sub ? "✓ Found it." : `✗ Not there yet${d.now ? ` (it points to ${esc(d.now)})` : ""}.`} Then Cloudflare issues the certificate.`;
   return `<div class="meta"><b>${esc(d.host)}</b> ${rm} · ${how} We check every 30 seconds.</div>${err}`;
 }
-// Email from the site's own domain (spec #17): the setup sits in Advanced once the custom domain is active; its status shows on the card.
-// Resend is connected once for every site (like Cloudflare); then each site is one click.
+// Email from the site's own domain (spec #17): a switch in Advanced once the custom domain is active, its status under it.
+// Resend is connected once for every site (like Cloudflare): turning the first one on shows the guided steps.
 function mail(i, me) {
-  const m = i.mail, rm = `<button class="icon" data-a="email-remove" title="Stop sending email" aria-label="Stop sending email"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>`;
-  if (m?.status === "setting up") return `<div class="meta">Email: ${esc(m.detail || "setting up")}…</div>`;
-  if (m?.status === "active") return `<div class="meta">Email: sending from <b>${esc(m.from)}</b> ✓ ${rm}</div>`;
-  if (m?.status === "verifying") return `<div class="meta">Email: verifying <b>${esc(m.domain)}</b> ${rm}</div><div class="meta">${m.records ? `Add these records at your DNS provider:</div><pre>${m.records.map((r) => `${esc(r.type)}  ${esc(r.name)}  ${r.priority != null ? `${esc(r.priority)} ` : ""}${esc(r.content)}`).join("\n")}</pre><div class="meta">` : "We added its DNS records in Cloudflare; this usually takes a few minutes. "}Emails send from <b>${esc(m.from)}</b> once it's verified.</div>`;
-  const err = m?.status === "error" ? `<p class="err">${esc(m.error)}</p>` : "";
-  const what = `<label>Send email from ${esc(i.customDomain.host.replace(/^www\./, ""))} (optional)</label><p class="small">Lets the bar email teammates you @mention, and your site's agent send email for the site (a contact form, say).</p>`;
-  if (!me.resend) return `<div class="mailset">${what}${rsForm(i.id)}${err}</div>`;
-  return `<div class="mailset">${what}<div class="row"><button class="btn ghost" data-a="email">${m?.status === "error" ? "Try again" : "Set up email"}</button></div>${err}</div>`;
+  const m = i.mail, host = i.customDomain?.host.replace(/^www\./, "") ?? m.domain;
+  const status = !m ? ""
+    : m.status === "setting up" ? `<div class="meta">${esc(m.detail || "setting up")}…</div>`
+    : m.status === "active" ? `<div class="meta">Sending from <b>${esc(m.from)}</b> ✓</div>`
+    : m.status === "verifying" ? `<div class="meta">Resend is verifying <b>${esc(m.domain)}</b>. ${m.records ? `Add these records at your DNS provider:</div><pre>${m.records.map((r) => `${esc(r.type)}  ${esc(r.name)}  ${r.priority != null ? `${esc(r.priority)} ` : ""}${esc(r.content)}`).join("\n")}</pre><div class="meta">` : "We added its DNS records in Cloudflare; this usually takes a few minutes. "}Emails send from <b>${esc(m.from)}</b> once it's verified.</div>`
+    : `<p class="err">${esc(m.error)}</p>`;
+  return `<div class="meta"><label class="auto perm" title="The bar emails teammates you @mention, and this site's agent can send email for the site (a contact form, say).">Send email from ${esc(host)}<button class="switch" role="switch" aria-checked="${!!m && m.status !== "error"}" data-a="email-toggle" data-set="${!!m}"${m?.status === "setting up" ? " disabled" : ""}></button></label></div>${status}<div class="rsslot"></div>`;
 }
 // Connect Resend: the same guided steps as Cloudflare. Resend has no pre-filled key form, so step 2 spells it out.
 function rsForm(id) {
@@ -121,7 +120,7 @@ async function render(note) {
       ${team(i)}
       <div class="foot"><details class="more"><summary>Advanced</summary><div class="meta">Sprite <b>${esc(i.id)}</b> · ${esc(i.status)} · version ${esc(i.version ?? i.ref)} · since ${esc(i.createdAt.slice(0, 10))}${i.pages?.state === "live" ? " · Cloudflare Pages · sandboxes on" : ""}${i.tagPath ? ` · bar in ${esc(i.tagPath)}` : ""}</div>
         <div class="meta"><label class="auto perm" title="It can read your other sites' conversations and start one with their agents to ask for changes. Only on your messages, not teammates'.">Allow this agent to talk with your other sites' agents<button class="switch" role="switch" aria-checked="${!!i.mcp && i.mcp.talk !== false}" data-a="mcp-talk"></button></label></div>
-        <div class="meta"><label class="auto perm" title="Restart, update or delete any of your sites, this one included, and manage their domains and teammates. It confirms destructive steps with you first.">Allow it to manage your Agent Keyboard sites, this one too<button class="switch" role="switch" aria-checked="${!!i.mcp?.manage}" data-a="mcp-manage"></button></label></div>${i.pages?.state === "live" && i.customDomain?.status === "active" && (!i.mail || i.mail.status === "error") ? mail(i, me) : ""}</details><div class="tools"><button class="btn ghost round" data-a="restart" title="Restart (only needed if the bar is stuck)" aria-label="Restart">${ICON.restart}</button><button class="btn ghost round danger" data-a="delete" title="Delete site" aria-label="Delete site"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/></svg></button></div><a class="btn primary" href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener">Open site</a></div>
+        <div class="meta"><label class="auto perm" title="Restart, update or delete any of your sites, this one included, and manage their domains and teammates. It confirms destructive steps with you first.">Allow it to manage your Agent Keyboard sites, this one too<button class="switch" role="switch" aria-checked="${!!i.mcp?.manage}" data-a="mcp-manage"></button></label></div>${i.mail || (i.pages?.state === "live" && i.customDomain?.status === "active") ? mail(i, me) : ""}</details><div class="tools"><button class="btn ghost round" data-a="restart" title="Restart (only needed if the bar is stuck)" aria-label="Restart">${ICON.restart}</button><button class="btn ghost round danger" data-a="delete" title="Delete site" aria-label="Delete site"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/></svg></button></div><a class="btn primary" href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener">Open site</a></div>
     </div>`;
   }).join("") + `<div class="row"><a class="btn ghost" href="/start">Add another site</a>${claudeBtn(me)}</div>${me.cloudflare ? `<p class="small acct">Cloudflare: connected (${esc(me.cloudflare)}) · <a href="#" id="cfre">Use a different token</a></p>` : ""}${me.resend ? `<p class="small acct">Resend: connected (${esc(me.resend)}) · <a href="#" id="rsre">Use a different key</a></p>` : ""}<div id="cfslot"></div>`;
   for (const id of advanced()) $app.querySelector(`.inst[data-id="${CSS.escape(id)}"] details.more`)?.setAttribute("open", "");
@@ -203,8 +202,15 @@ async function render(note) {
   });
   $app.querySelectorAll("button[data-a]").forEach((b) => (b.onclick = async () => {
     const id = b.closest(".inst").dataset.id, a = b.dataset.a;
-    if (a === "domain-remove" && !confirm(`Remove this domain from your Pages site? Its DNS record stays; delete it yourself if you no longer need it.${b.closest(".inst").querySelector("[data-a=email-remove]") ? " Email from this domain stops too." : ""}`)) return;
-    if (a === "email-remove" && !confirm("Stop sending email from this domain? Its sending key is deleted on Resend; the domain and its DNS records stay.")) return;
+    if (a === "domain-remove" && !confirm(`Remove this domain from your Pages site? Its DNS record stays; delete it yourself if you no longer need it.${b.closest(".inst").querySelector("[data-a=email-toggle][aria-checked=true]") ? " Email from this domain stops too." : ""}`)) return;
+    // Email: on sets it up (first connecting Resend, with the guided steps); off deletes the site's sending key.
+    if (a === "email-toggle") {
+      const on = b.getAttribute("aria-checked") !== "true", slot = b.closest(".inst").querySelector(".rsslot");
+      b.setAttribute("aria-checked", on);
+      if (!me.resend) { slot.innerHTML = on ? rsForm(id) : ""; rsWire(); if (on || b.dataset.set !== "true") return; } // off with nothing set up (or a failed try to clear)
+      b.disabled = true;
+      return api(`instances/${id}/${on ? "email" : "email-remove"}`, {}).then(() => render(), (e) => render(e.message));
+    }
     // The switch flips in place (no note line, no disabled row); the re-render only adds or drops the Update button.
     if (a === "autoupdate") {
       b.setAttribute("aria-checked", b.getAttribute("aria-checked") !== "true");
