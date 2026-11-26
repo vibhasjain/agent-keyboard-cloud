@@ -181,13 +181,13 @@ export async function provision(opts, progress = () => {}) {
   return { sprite: name, url, siteId, repo: repo.full_name, domain, connection: conn.id, tag: scriptTag(url, siteId), starter, staging, tagPath };
 }
 
-/** The bar signs in against our Supabase: invite the email unless it already has an account. */
+/** The bar signs in against our Supabase: create the account (confirmed, no email: sign-in is by handoff link) unless it exists. */
 async function ensureBarUser({ url, serviceKey }, email) {
-  const res = await fetch(`${url}/auth/v1/invite`, {
+  const res = await fetch(`${url}/auth/v1/admin/users`, {
     method: "POST",
     headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ email }),
+    body: JSON.stringify({ email, email_confirm: true }),
   });
   if (res.ok || res.status === 422) return; // 422: already registered
-  throw new Error(`supabase invite: ${res.status} ${(await res.text()).slice(0, 200)}`);
+  throw new Error(`supabase create user: ${res.status} ${(await res.text()).slice(0, 200)}`);
 }
