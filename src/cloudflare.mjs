@@ -27,13 +27,16 @@ async function cf(token, method, path, body) {
   return data.result;
 }
 
+/** Cloudflare names a new account "<Email>'s Account" with the first letter capitalized; emails are lowercase. */
+export const accountLabel = (name) => name?.replace(/^\S+@\S+(?='s Account$)/i, (e) => e.toLowerCase()) ?? null;
+
 /** Check a pasted token. Returns { accountId, accountName }. */
 export async function verify(token) {
   const t = await cf(token, "GET", "/user/tokens/verify").catch(() => null);
   if (t?.status !== "active") throw Object.assign(new Error("Cloudflare didn't accept that token. Copy it again from the token page."), { code: 400 });
   const accounts = await cf(token, "GET", "/accounts?per_page=50").catch(() => []);
   if (!accounts.length) throw Object.assign(new Error("That token can't see a Cloudflare account. Create it from our link so it has the right permissions."), { code: 400 });
-  return { accountId: accounts[0].id, accountName: accounts[0].name };
+  return { accountId: accounts[0].id, accountName: accountLabel(accounts[0].name) };
 }
 
 /** The Pages project `name` (Direct Upload), created if missing. Returns { name, subdomain } (subdomain = "x.pages.dev"). */

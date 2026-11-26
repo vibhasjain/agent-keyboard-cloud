@@ -14,7 +14,7 @@ import { mint, pollClaim, register, sprites } from "./fly.mjs";
 import { appReady, authorizeUrl, createdFromManifest, installationPage, installUrl, loadApp, manifest, refreshUser, signIn, userRepos } from "./githubapp.mjs";
 import { mcp } from "./mcp.mjs";
 import { addTag, getRepo, putSecret, putVariable, writeFile } from "./github.mjs";
-import { TOKEN_URL, WORKFLOW, addPagesDomain, cnameOf, ensureProject, findZone, isApex, pagesDomain, pagesMemory, pointDns, removePagesDomain, verify } from "./cloudflare.mjs";
+import { TOKEN_URL, WORKFLOW, addPagesDomain, cnameOf, ensureProject, findZone, isApex, pagesDomain, pagesMemory, pointDns, removePagesDomain, verify, accountLabel } from "./cloudflare.mjs";
 import { ensureSprite, provision, slug, spriteName } from "./provision.mjs";
 
 const env = process.env;
@@ -456,7 +456,7 @@ const routes = {
   "GET /cloud/me": (q, req, res, s) => {
     if (!s) return send(res, 200, { signedIn: false, app: appReady() });
     const inst = load().find((i) => i.email === s.email);
-    send(res, 200, { signedIn: true, login: s.login, email: s.email, github: !!ghUser(s.login), installUrl: appReady() ? installUrl("start") : null, instance: inst && pub(inst), cloudflare: cfs.get(s.email)?.accountName ?? null, cloudflareTokenUrl: TOKEN_URL, claude: mcpServer.claude(s.login), events: eventsUrl(s.email), flow: flowView(flows.get(s.email)) });
+    send(res, 200, { signedIn: true, login: s.login, email: s.email, github: !!ghUser(s.login), installUrl: appReady() ? installUrl("start") : null, instance: inst && pub(inst), cloudflare: accountLabel(cfs.get(s.email)?.accountName), cloudflareTokenUrl: TOKEN_URL, claude: mcpServer.claude(s.login), events: eventsUrl(s.email), flow: flowView(flows.get(s.email)) });
   },
   "GET /cloud/repos": async (q, req, res, s) => {
     const u = s && ghUser(s.login);
