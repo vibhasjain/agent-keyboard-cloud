@@ -162,6 +162,47 @@ async function runFly(flow) {
   }
 }
 
+// Use a different Claude account: a fresh sign-in on the LOGIN Sprite, a new connector, every site's
+// ANTHROPIC_BASE_URL pointed at it (one restart each), then the old connector removed. Runs in the
+// background (it outlasts the proxy's timeout); the dashboard polls GET /cloud/claude/switch.
+const switches = new Map(); // email → { step: "starting" | "code" | "switching" | "done" | "error", url, error, failed }
+async function claudeSwitch(email, code) {
+  const st = switches.get(email);
+  try {
+    const creds = await mint(flyOf(email)), api = sprites(creds);
+    if (!code) {
+      if (!(await api.get(LOGIN).catch((e) => (e.status === 404 ? null : Promise.reject(e))))) await api.create(LOGIN);
+      return Object.assign(st, { step: "code", url: await claudeLoginStart(api, LOGIN) });
+    }
+    const conn = await claudeLoginFinish(api, LOGIN, code, creds);
+    await api.setPolicy(conn, "ak-");
+    api.remove(LOGIN).catch((e) => console.error("remove", LOGIN, e.message));
+    const old = claudeOf(email), failed = [];
+    for (const i of load().filter((i) => i.email === email)) {
+      try {
+        const sapi = sprites(await mint(open(i.assertion)));
+        if (!(await sapi.connections()).some((c) => c.id === conn)) throw new Error("on another Fly account");
+        const line = `ANTHROPIC_BASE_URL=${shq(`https://api.sprites.dev/v1/gateway/custom_api/${conn}`)}\n`;
+        await sapi.exec(i.id, [
+          `grep -v '^ANTHROPIC_BASE_URL=' ~/ak.env > ~/ak.env.new`,
+          `printf %s ${shq(Buffer.from(line).toString("base64"))} | base64 -d >> ~/ak.env.new`,
+          `chmod 600 ~/ak.env.new && mv ~/ak.env.new ~/ak.env`,
+          `sprite-env services restart ak`,
+        ].join(" && "), { timeoutMs: 120e3 });
+        upsert({ ...(load().find((x) => x.id === i.id) ?? i), connection: conn });
+      } catch (e) {
+        console.error("claude switch", i.id, e.message);
+        failed.push(i.id);
+      }
+    }
+    setAcct(email, { claude: conn });
+    if (old && old !== conn && !failed.length) await api.removeConnection(old).catch((e) => (e.status === 404 ? null : console.error("remove connector", e.message)));
+    Object.assign(st, { step: "done", failed });
+  } catch (e) {
+    Object.assign(st, { step: "error", error: e.message });
+  }
+}
+
 async function runClaude(flow, code) {
   try {
     step(flow, "connector", { detail: "signing in to Claude" });
@@ -591,7 +632,7 @@ const routes = {
   "GET /cloud/me": (q, req, res, s) => {
     if (!s) return send(res, 200, { signedIn: false, app: appReady() });
     const inst = load().find((i) => i.email === s.email);
-    send(res, 200, { signedIn: true, login: s.login, email: s.email, github: !!ghUser(s.login), installUrl: appReady() ? installUrl("start") : null, instance: inst && pub(inst), cloudflare: accountLabel(cfs.get(s.email)?.accountName), resend: resends.get(s.email)?.label ?? null, fly: !!flyOf(s.email), claudeSignIn: !!claudeOf(s.email), cloudflareTokenUrl: TOKEN_URL, claude: mcpServer.claude(s.login), events: eventsUrl(s.email), flow: flowView(flows.get(s.email)) });
+    send(res, 200, { signedIn: true, login: s.login, email: s.email, github: !!ghUser(s.login), installUrl: appReady() ? installUrl("start") : null, instance: inst && pub(inst), claudeAccount: !!claudeOf(s.email), cloudflare: accountLabel(cfs.get(s.email)?.accountName), resend: resends.get(s.email)?.label ?? null, fly: !!flyOf(s.email), claudeSignIn: !!claudeOf(s.email), cloudflareTokenUrl: TOKEN_URL, claude: mcpServer.claude(s.login), events: eventsUrl(s.email), flow: flowView(flows.get(s.email)) });
   },
   "GET /cloud/repos": async (q, req, res, s) => {
     const u = s && ghUser(s.login);
@@ -697,6 +738,23 @@ const routes = {
     mcpServer.forget(s.login, s.email);
     res.setHeader("Set-Cookie", `akc=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`);
     send(res, 200, { ok: true, warning });
+  },
+
+  "GET /cloud/claude/switch": (q, req, res, s) => send(res, s ? 200 : 401, s ? switches.get(s.email) ?? { step: null } : { error: "Sign in" }),
+  "POST /cloud/claude/switch": (q, req, res, s, b) => {
+    if (!s) return send(res, 401, { error: "Sign in" });
+    if (!flyOf(s.email)) return send(res, 400, { error: "Connect Fly first" });
+    const st = switches.get(s.email), code = String(b.code ?? "").trim();
+    if (code) {
+      if (st?.step !== "code") return send(res, 409, { error: "No Claude sign-in is waiting. Start again." });
+      if (!/^[\w#.~-]{10,400}$/.test(code)) return send(res, 400, { error: "Paste the code Claude showed you" });
+      st.step = "switching";
+    } else {
+      if (["starting", "switching"].includes(st?.step)) return send(res, 409, { error: "Already in progress" });
+      switches.set(s.email, { step: "starting" });
+    }
+    claudeSwitch(s.email, code);
+    send(res, 200, switches.get(s.email));
   },
 
   "GET /cloud/instances": async (q, req, res, s) => {
