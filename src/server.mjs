@@ -234,14 +234,14 @@ async function runSite(flow) {
     (d) => (flow.detail = d),
   );
   // A brought site gets the tag committed to its index.html; if there isn't one, the page shows it to paste.
-  const { path: tagPath, previous } = r.starter || r.staging ? { path: r.tagPath, previous: r.previous } : await addTag(user.token, r.repo, r.tag).catch(() => ({ path: null, previous: null }));
-  upsert({ id: r.sprite, tagPath, previous, email: flow.email, login: flow.login, siteId: r.siteId, repo: r.repo, domain: r.domain, url: r.url, connection: r.connection, starter: r.starter, staging: r.staging, tag: r.tag, via: flow.via, ref: REF, createdAt: new Date().toISOString(), assertion: seal(flow.assertion) });
+  const { path: tagPath, previous } = r.starter ? { path: null, previous: null } : await addTag(user.token, r.repo, r.tag).catch(() => ({ path: null, previous: null }));
+  upsert({ id: r.sprite, tagPath, previous, email: flow.email, login: flow.login, siteId: r.siteId, repo: r.repo, domain: r.domain, url: r.url, connection: r.connection, starter: r.starter, tag: r.tag, via: flow.via, ref: REF, createdAt: new Date().toISOString(), assertion: seal(flow.assertion) });
   flow.assertion = null;
   // Every site is hosted on Cloudflare Pages (connected before the flow starts).
   flow.detail = "hosting your site on Cloudflare Pages";
   await setupPages(r.sprite, user.token, cfs.get(flow.email));
   const pages = load().find((i) => i.id === r.sprite)?.pages ?? {};
-  step(flow, "done", { result: { url: pages.staging ?? pages.live ?? r.url, pagesError: pages.state === "error" ? pages.error : null, tag: r.tag, starter: r.starter, staging: r.staging, repo: r.repo, tagPath, previous } });
+  step(flow, "done", { result: { url: pages.live ?? r.url, pagesError: pages.state === "error" ? pages.error : null, tag: r.tag, starter: r.starter, repo: r.repo, tagPath, previous } });
 }
 
 const flowView = (f) => f && { step: f.step, detail: f.detail, error: f.error, userCode: f.userCode, verifyUrl: f.verifyUrl, loginUrl: f.loginUrl, result: f.result, sprite: f.sprite };
@@ -262,7 +262,7 @@ async function setupPages(id, ghToken, c) {
       await putSecret(ghToken, inst.repo, "CLOUDFLARE_API_TOKEN", token);
       await putVariable(ghToken, inst.repo, "CLOUDFLARE_ACCOUNT_ID", c.accountId);
       await putVariable(ghToken, inst.repo, "CLOUDFLARE_PAGES_PROJECT", p.name);
-      for (const b of inst.staging ? ["ak-staging", live] : [live]) await writeFile(ghToken, inst.repo, b, WORKFLOW_PATH, WORKFLOW, "Deploy to Cloudflare Pages (Agent Keyboard)");
+      await writeFile(ghToken, inst.repo, b, WORKFLOW_PATH, WORKFLOW, "Deploy to Cloudflare Pages (Agent Keyboard)");
     }
     set({ detail: "turning on sandboxes" });
     // The Sprite: sandbox previews on Pages, the Pages origins allowed to call the bar, and the agent's memory.
@@ -271,9 +271,9 @@ async function setupPages(id, ghToken, c) {
     const [sitesJson, had = ""] = out.trim().split("\n");
     const sites = JSON.parse(sitesJson);
     sites[0].sandbox = { preview: `https://{branch}.${p.subdomain}` };
-    const extra = [...new Set([...had.split(",").filter(Boolean), `https://${p.subdomain}`, `https://ak-staging.${p.subdomain}`])].join(",");
+    const extra = [...new Set([...had.split(",").filter(Boolean), `https://${p.subdomain}`])].join(",");
     const lines = `SITES=${shq(JSON.stringify(sites))}\nEXTRA_ORIGINS=${shq(extra)}\nCLOUDFLARE_API_TOKEN=${shq(token)}\nCLOUDFLARE_ACCOUNT_ID=${shq(c.accountId)}\n`;
-    const memory = pagesMemory({ sub: p.subdomain, live, staging: inst.staging, domain: inst.customDomain?.host, git: p.git });
+    const memory = pagesMemory({ sub: p.subdomain, live, domain: inst.customDomain?.host, git: p.git });
     await api.exec(id, [
       `grep -v -e '^SITES=' -e '^EXTRA_ORIGINS=' -e '^CLOUDFLARE_API_TOKEN=' -e '^CLOUDFLARE_ACCOUNT_ID=' ~/ak.env > ~/ak.env.new`,
       `printf %s ${shq(Buffer.from(lines).toString("base64"))} | base64 -d >> ~/ak.env.new`,
@@ -281,7 +281,7 @@ async function setupPages(id, ghToken, c) {
       `mkdir -p ~/.claude && touch ~/.claude/CLAUDE.md && { grep '^<!-- ak-' ~/.claude/CLAUDE.md || true; } > ~/.ak-keep && printf %s ${shq(Buffer.from(memory).toString("base64"))} | base64 -d > ~/.claude/CLAUDE.md && sed 's/^/\\n/' ~/.ak-keep >> ~/.claude/CLAUDE.md`,
       `sprite-env services restart ak`,
     ].join(" && "), { timeoutMs: 120e3 });
-    set({ state: "live", detail: "", branch: live, live: `https://${p.subdomain}`, staging: inst.staging ? `https://ak-staging.${p.subdomain}` : null });
+    set({ state: "live", detail: "", branch: live, live: `https://${p.subdomain}` });
   } catch (e) {
     console.error("pages", id, e.message);
     const perms = /Resource not accessible by integration/.test(e.message);
@@ -327,7 +327,7 @@ async function syncDomain(id, c, origin) {
   const { out } = await api.exec(id, `. ~/ak.env; printf '%s' "$EXTRA_ORIGINS"`, { timeoutMs: 60e3 });
   const had = out.trim().split(",").filter(Boolean);
   const lines = `EXTRA_ORIGINS=${shq([...new Set([...had, ...(origin ? [origin] : [])])].join(","))}\nCLOUDFLARE_API_TOKEN=${shq(open(c.token))}\nCLOUDFLARE_ACCOUNT_ID=${shq(c.accountId)}\n`;
-  const memory = pagesMemory({ sub: inst.pages.sub, live: inst.pages.branch ?? "main", staging: inst.staging, domain: inst.customDomain?.host, git: inst.pages.git });
+  const memory = pagesMemory({ sub: inst.pages.sub, live: inst.pages.branch ?? "main", domain: inst.customDomain?.host, git: inst.pages.git });
   await api.exec(id, [
     `grep -v -e '^EXTRA_ORIGINS=' -e '^CLOUDFLARE_API_TOKEN=' -e '^CLOUDFLARE_ACCOUNT_ID=' ~/ak.env > ~/ak.env.new`,
     `printf %s ${shq(Buffer.from(lines).toString("base64"))} | base64 -d >> ~/ak.env.new`,
@@ -390,10 +390,10 @@ async function act(inst, action) {
   }
 }
 
-// The page the bar lives on: Pages (staging first), the custom domain, the Sprite, or the owner's own host.
+// The page the bar lives on: the custom domain or Pages, the Sprite, or the owner's own host.
 function siteUrl(inst) {
   const pg = inst.pages?.state === "live" && inst.pages;
-  return pg ? pg.staging ?? (inst.customDomain?.status === "active" ? `https://${inst.customDomain.host}` : pg.live) : inst.starter ? inst.url : `https://${inst.domain}`;
+  return pg ? (inst.customDomain?.status === "active" ? `https://${inst.customDomain.host}` : pg.live) : inst.starter ? inst.url : `https://${inst.domain}`;
 }
 /** The site, already signed in to the bar as `email`: a single-use magic-link token the widget redeems from #ak_handoff=. */
 async function handoff(inst, email) {
@@ -936,7 +936,7 @@ async function dispatch(req, res, u, s, b) {
       if (m[2] === "tag") {
         const gu = ghUser(s.login);
         if (!gu || inst.starter) return send(res, gu ? 400 : 401, { error: gu ? "Starter sites already have the bar" : "Sign in with GitHub again" });
-        const { path, previous } = await addTag(gu.token, inst.repo, inst.tag, inst.staging ? "ak-staging" : undefined);
+        const { path, previous } = await addTag(gu.token, inst.repo, inst.tag);
         upsert({ ...inst, tagPath: path, previous: inst.previous ?? previous });
         return send(res, 200, { ok: true, path });
       }

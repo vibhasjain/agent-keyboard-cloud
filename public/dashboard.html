@@ -156,18 +156,15 @@ async function render(note) {
   let latest;
   try { ({ instances: list, latest } = await api("instances")); } catch (e) { $app.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
   if (!list.length) return location.replace("/start");
-  // The card's title is the site's address: the custom domain once active, else Pages (or the staging preview), else the repo's own domain.
+  // The card's title is the site's address: the custom domain once active, else Pages, else the repo's own domain.
   const host = (i) => (i.pages?.state === "live" ? (i.customDomain?.status === "active" ? i.customDomain.host : i.pages.live) : i.starter ? i.url : i.domain).replace("https://", "");
-  // A staged site's heading is its live address; the bar (and the signed-in link) is on the ak-staging preview.
-  const open = (i) => (i.pages?.state === "live" && i.pages.staging ? `href="https://${esc(host(i))}" target="_blank" rel="noopener"` : `href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar"`);
   $app.innerHTML = (note ? `<p class="note">${esc(note)}</p>` : "") + (me.cloudflare ? "" : cfForm(me)) + list.map((i) => {
     const behind = latest ? i.version !== latest : null, bad = !["running", "warm", "cold"].includes(i.status);
     return `
     <div class="card inst" data-id="${esc(i.id)}">
-      <div class="head"><h2>${bad ? `<span class="dot bad" title="${esc(i.status)}"></span>` : ""}<a ${open(i)}>${esc(host(i))}</a>${i.pages?.state === "live" && i.customDomain?.status === "active" ? ` ${unlink(i.customDomain.host)}` : ""}</h2></div>
+      <div class="head"><h2>${bad ? `<span class="dot bad" title="${esc(i.status)}"></span>` : ""}<a href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar">${esc(host(i))}</a>${i.pages?.state === "live" && i.customDomain?.status === "active" ? ` ${unlink(i.customDomain.host)}` : ""}</h2></div>
       <div class="meta"><a href="https://github.com/${esc(i.repo)}" target="_blank" rel="noopener">${esc(i.repo)}</a></div>
       <div class="meta upd"><span>${behind === null ? "" : behind ? `Agent Keyboard update available · <button class="link" data-a="update">Update now</button>` : "Agent Keyboard is up to date"}</span><label class="auto" title="Installs each new Agent Keyboard release when no job is running">Auto-update<button class="switch" role="switch" aria-checked="${i.autoUpdate !== false}" data-a="autoupdate" aria-label="Auto-update"></button></label></div>
-      ${i.staging ? `<div class="meta">Staged: the bar commits to <b>ak-staging</b>, previewed at ${i.pages?.staging ? `<a href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar">${esc(i.pages.staging.replace("https://", ""))}</a>` : "its preview"}; tell it "deploy to live" to ship</div>` : ""}
       ${i.starter ? "" : i.tagPath ? "" : `<pre>${esc(i.tag)}</pre>`}
       ${moved(i)}
       ${hosting(i, me)}

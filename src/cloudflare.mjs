@@ -92,28 +92,13 @@ jobs:
           npx -y wrangler@4 pages deploy "$DIR" --project-name="$PROJECT" --branch="$GITHUB_REF_NAME" --commit-dirty=true
 `;
 
-/** The Sprite agent's memory once the site is on Pages (replaces the Sprite-preview staging memory). */
-export function pagesMemory({ sub, live, staging, domain, git }) {
+/** The Sprite agent's memory once the site is on Pages. */
+export function pagesMemory({ sub, live, domain, git }) {
   const hosting = `Every push deploys to Cloudflare Pages ${git ? "through the project's own Git integration (Cloudflare builds each push; there's no deploy workflow, don't add one)" : "through the GitHub Actions workflow \`.github/workflows/agent-keyboard-pages.yml\`"} (about a minute after the push): \`${live}\` → https://${sub}${domain ? ` and the custom domain https://${domain} (the site's real address: use it in links, metadata and replies)` : ""}, any other branch → https://<branch>.${sub} (lowercase, \`/\` → \`-\`). ${git ? "" : "Never remove that workflow. "}The site must build to static files (Pages Functions in \`functions/\` are fine); a database has to be hosted (e.g. Supabase), not on this machine.
 
 \`CLOUDFLARE_API_TOKEN\` and \`CLOUDFLARE_ACCOUNT_ID\` in your environment are the owner's Cloudflare token and account (Pages: Edit, DNS: Edit, Zone: Read, Account Settings: Read). Use them for DNS records on their zones and for this Pages project, never ask the owner for another token for those, and never print the token. They can't change redirect rules, page rules or other zone settings: for those, tell the owner exactly what to set in the Cloudflare dashboard.`;
   const managed = `# Managed by Agent Keyboard\n\nThis is a managed instance: it was set up and is managed at https://agentkeyboard.com/dashboard (or from Claude through the Agent Keyboard connector). You can't invite people, restart, update or delete this instance yourself. When the owner asks to add a teammate (or remove one), tell them to use Teammates on https://agentkeyboard.com/dashboard, or ask Claude with the Agent Keyboard connector (invite_teammate). They get a join link to send.\n`;
-  if (!staging) return `${managed}\n# Hosting\n\n${hosting}\n`;
-  return `${managed}
-# Staging and live
-
-This site is staged. Your pushes go to the \`ak-staging\` branch, previewed at https://ak-staging.${sub}. Nothing you push there reaches the live site.
-
-${hosting}
-
-When the owner asks to deploy, publish, ship or "go live":
-1. Make sure everything is committed and pushed to \`ak-staging\`.
-2. \`git fetch origin ${live}\` and merge it into \`ak-staging\` if it moved (resolve conflicts, push \`ak-staging\`).
-3. \`git push origin ak-staging:${live}\`. That deploys https://${sub}, and their own host too if they have one.
-4. Reply with what shipped.
-
-Never push to \`${live}\` for any other reason.
-`;
+  return `${managed}\n# Hosting\n\n${hosting}\n`;
 }
 
 // ---- custom domains (M4) ----

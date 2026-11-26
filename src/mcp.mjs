@@ -257,8 +257,7 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
           r.pagesError ? `Cloudflare Pages hosting didn't finish: ${r.pagesError} Retry with site_action { site: "${f.sprite}", action: "pages" }.` : null,
           `Done. Site ${f.sprite}: ${r.url}`,
           `Open it signed in to the bar: ${open(f.sprite)}`,
-          r.staging ? `It's staged: the bar commits to the ak-staging branch (that preview). Tell the bar "deploy to live" to ship.` : null,
-          !r.starter && !r.staging && !r.tagPath ? `We couldn't find an index.html for the bar. Add this tag before </body> on the site's pages:\n${r.tag}` : null,
+          !r.starter && !r.tagPath ? `We couldn't find an index.html for the bar. Add this tag before </body> on the site's pages:\n${r.tag}` : null,
           r.previous ? `This site already had Agent Keyboard at ${r.previous.origin}. Ask the user whether to bring its notes, memory and settings over: they open ${BASE}/cloud/import/${f.sprite} and sign in to the old one once. Or start fresh: site_action { site: "${f.sprite}", action: "import-skip" }.` : null,
           `Manage it at ${BASE}/dashboard.`,
         ].filter(Boolean).join("\n");
@@ -318,8 +317,8 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
     server.registerTool("list_sites", { description: "The user's Agent Keyboard sites: status, repo, URLs, hosting and domain. its_agent says what THAT site's own agent may do to the other sites; it doesn't limit messaging that site, which works for any of them.", annotations: { readOnlyHint: true } }, async () =>
       text((await sites()).map((i) => ({
         site: i.id, name: i.siteId, status: i.status, repo: i.repo,
-        url: i.customDomain?.status === "active" ? `https://${i.customDomain.host}` : i.pages?.staging ?? i.pages?.live ?? i.url,
-        staged: !!i.staging, hosting: i.pages?.state === "live" ? "Cloudflare Pages" : i.pages?.state ? `Cloudflare Pages: ${i.pages.state}${i.pages.error ? ` (${i.pages.error})` : ""}` : "not on Pages",
+        url: i.customDomain?.status === "active" ? `https://${i.customDomain.host}` : i.pages?.live ?? i.url,
+        hosting: i.pages?.state === "live" ? "Cloudflare Pages" : i.pages?.state ? `Cloudflare Pages: ${i.pages.state}${i.pages.error ? ` (${i.pages.error})` : ""}` : "not on Pages",
         domain: i.pages?.state === "live" ? domainText(i) : undefined, teammates: i.team ?? [], auto_update: i.autoUpdate !== false, email: mailText(i), moved_from: i.previous ? { from: i.previous.origin, state: i.migrate?.state ?? `not asked yet (bring it over: ${BASE}/cloud/import/${i.id})`, report: i.migrate?.report ?? i.migrate?.error } : undefined, its_agent: { can_message_other_sites: !!i.mcp?.talk, can_manage_other_sites: !!i.mcp?.manage }, open_signed_in: open(i.id), created: i.createdAt?.slice(0, 10), via: i.via ?? "web",
       }))));
     server.registerTool("site_action", {

@@ -47,12 +47,6 @@ export async function isBlank(token, fullName) {
 export const putFile = (token, fullName, path, content, message) =>
   gh(token, "PUT", `/repos/${fullName}/contents/${path}`, { message, content: Buffer.from(content).toString("base64") });
 
-/** Create `branch` from the default branch (kept if it already exists). */
-export async function ensureBranch(token, fullName, from, branch) {
-  const { object } = await gh(token, "GET", `/repos/${fullName}/git/ref/heads/${from}`);
-  await gh(token, "POST", `/repos/${fullName}/git/refs`, { ref: `refs/heads/${branch}`, sha: object.sha }).catch((e) => (e.status === 422 ? null : Promise.reject(e)));
-}
-
 /** Give the Sprite push access with its own public key (the private half never leaves it). */
 export async function addDeployKey(token, fullName, title, key) {
   try {
