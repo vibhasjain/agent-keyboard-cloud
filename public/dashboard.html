@@ -73,7 +73,7 @@ function mail(i, me) {
     : m.status === "active" ? `<div class="meta">Sending from <b>${esc(m.from)}</b> ✓</div>`
     : m.status === "verifying" ? `<div class="meta">Resend is verifying <b>${esc(m.domain)}</b>. ${m.records ? `Add these records at your DNS provider:</div><pre>${m.records.map((r) => `${esc(r.type)}  ${esc(r.name)}  ${r.priority != null ? `${esc(r.priority)} ` : ""}${esc(r.content)}`).join("\n")}</pre><div class="meta">` : "We added its DNS records in Cloudflare; this usually takes a few minutes. "}Emails send from <b>${esc(m.from)}</b> once it's verified.</div>`
     : `<p class="err">${esc(m.error)}</p>`;
-  return `<div class="meta"><label class="auto perm" title="The bar emails teammates you @mention, and this site's agent can send email for the site (a contact form, say).">Send email from ${esc(host)}<button class="switch" role="switch" aria-checked="${!!m && m.status !== "error"}" data-a="email-toggle" data-set="${!!m}"${m?.status === "setting up" ? " disabled" : ""}></button></label></div>${status}<div class="rsslot"></div>`;
+  return `<div class="meta"><label class="auto perm" title="The bar emails teammates you @mention, and this site's agent can send email for the site (a contact form, say).">Allow it to send email from ${esc(host)}<button class="switch" role="switch" aria-checked="${!!m && m.status !== "error"}" data-a="email-toggle" data-set="${!!m}"${m?.status === "setting up" ? " disabled" : ""}></button></label></div>${status}<div class="rsslot"></div>`;
 }
 // Connect Resend: the same guided steps as Cloudflare. Resend has no pre-filled key form, so step 2 spells it out.
 function rsForm(id) {

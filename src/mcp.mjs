@@ -332,7 +332,7 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
     server.registerTool("connect_resend", { description: "Check the Resend connection (needed for setup_email; connected once for all sites, like Cloudflare). If missing, returns the page where the user pastes their key.", annotations: { readOnlyHint: true } }, async () => {
       const me = await call("GET", "/cloud/me");
       if (me.resend) return text(`Resend is connected (${me.resend}).`);
-      return text(`Not connected yet. Ask the user to open ${BASE}/dashboard, open Advanced on a site with its own domain, and follow "Send email from …": at resend.com (free), API Keys → Create API key, named Agent Keyboard, Full access; then paste it there, never in this chat. Then call connect_resend again.`);
+      return text(`Not connected yet. Ask the user to open ${BASE}/dashboard, open Advanced on a site with its own domain, and turn on "Allow it to send email from …": at resend.com (free), API Keys → Create API key, named Agent Keyboard, Full access; then paste it there, never in this chat. Then call connect_resend again.`);
     });
     server.registerTool("setup_email", { description: "Let a site send email from its own domain: the bar emails @mentioned teammates, and the site's agent can send email for the site. Needs an active custom domain and Resend connected (connect_resend). Adds the domain to Resend and its DNS records in Cloudflare, and gives the site a key that can only send from that domain.", inputSchema: { site } }, async ({ site: id }) => {
       const i = await find(id);
