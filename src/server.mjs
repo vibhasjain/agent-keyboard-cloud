@@ -300,7 +300,8 @@ async function act(inst, action) {
     upsert({ ...(load().find((i) => i.id === inst.id) ?? inst), ref: REF, version });
   } else if (action === "delete") {
     await api.remove(inst.id).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
-    await api.removeConnection(inst.connection).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
+    for (const c of [inst.connection, inst.mcp?.connection].filter(Boolean)) await api.removeConnection(c).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
+    mcpServer.revoke(inst.id);
     save(load().filter((i) => i.id !== inst.id));
   }
 }
@@ -321,6 +322,28 @@ async function handoff(inst, email) {
   const d = (await r?.json().catch(() => null)) ?? {};
   const token = d.hashed_token ?? d.properties?.hashed_token;
   return token ? `${site}/#ak_handoff=${encodeURIComponent(token)}` : site;
+}
+// Spec #16: "Let this agent use your other sites". A grant in a Custom API connector for BASE (this Sprite only):
+// the Sprite's egress adds it, so the token never reaches the Sprite. ~/ak-mcp.json points Claude Code at the
+// gateway; the Sprite server passes it only to owners' turns. A marked line in ~/.claude/CLAUDE.md says what it's for.
+const MCP_NOTE = "<!-- ak-mcp -->";
+async function siteMcp(inst, on, manage) {
+  const api = sprites(await mint(open(inst.assertion)));
+  if (inst.mcp?.connection) await api.removeConnection(inst.mcp.connection).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
+  mcpServer.revoke(inst.id);
+  let mcp = null;
+  if (on) {
+    const conn = await api.createConnection({ name: `ak-mcp-${inst.id}`, base_api_url: BASE, access_token: mcpServer.grant(inst, manage), auth_method: "header", auth_header_prefix: "Bearer" });
+    await api.setPolicy(conn.id, inst.id);
+    mcp = { connection: conn.id, manage: !!manage };
+  }
+  upsert({ ...(load().find((i) => i.id === inst.id) ?? inst), mcp });
+  const cfg = JSON.stringify({ mcpServers: { "agent-keyboard": { type: "http", url: `https://api.sprites.dev/v1/gateway/custom_api/${mcp?.connection}/mcp` } } });
+  const note = `${MCP_NOTE} You have the agent-keyboard MCP tools when the site's owner sends a message (not for teammates): use them to read the owner's other Agent Keyboard sites' conversations and to ask those sites' agents for changes (send_message)${manage ? ", and to manage those sites (restart, domains, teammates; confirm destructive steps first)" : ""}. Use only these injected tools: never add another MCP server, run an OAuth flow, or send anyone an Agent Keyboard sign-in link.`;
+  await api.exec(inst.id, [
+    `mkdir -p ~/.claude && touch ~/.claude/CLAUDE.md && sed -i '/${MCP_NOTE}/d' ~/.claude/CLAUDE.md`,
+    on ? `printf '%s\n' ${shq(cfg)} > ~/ak-mcp.json && printf '\n%s\n' ${shq(note)} >> ~/.claude/CLAUDE.md` : "rm -f ~/ak-mcp.json",
+  ].join(" && "), { timeoutMs: 60e3 });
 }
 /** Add or remove a teammate on the Sprite's bar allow-list (the server rereads it within 10 s). */
 async function teamOnSprite(inst, email, add) {
@@ -549,12 +572,16 @@ async function dispatch(req, res, u, s, b) {
       (updating ?? Promise.resolve()).then(tick); // after any pass already running (it may have used the old version)
       return send(res, 202, "updating", "text/plain");
     }
-    const m = u.pathname.match(/^\/cloud\/instances\/([\w-]+)\/(restart|update|autoupdate|delete|tag|pages|domain|domain-remove|invite|uninvite)$/);
+    const m = u.pathname.match(/^\/cloud\/instances\/([\w-]+)\/(restart|update|autoupdate|delete|tag|pages|domain|domain-remove|invite|uninvite|mcp)$/);
     if (req.method === "POST" && m) {
       const inst = s && load().find((i) => i.id === m[1] && i.email === s.email);
       if (!inst) return send(res, 404, { error: "No such instance" });
       if (m[2] === "autoupdate") {
         upsert({ ...inst, autoUpdate: inst.autoUpdate === false });
+        return send(res, 200, { ok: true });
+      }
+      if (m[2] === "mcp") {
+        await siteMcp(inst, b?.on === true, b?.on === true && b?.manage === true);
         return send(res, 200, { ok: true });
       }
       if (m[2] === "invite" || m[2] === "uninvite") {

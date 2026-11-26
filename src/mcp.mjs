@@ -11,6 +11,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 
+// A site agent (spec #16) gets the relay tools; the manage tools only when allowed; never the setup tools.
+const SITE_TOOLS = ["whoami", "list_sites", "read_conversation", "send_message", "get_reply", "domain_status"];
+const MANAGE_TOOLS = ["site_action", "add_domain", "remove_domain", "invite_teammate", "remove_teammate"];
 const ACCESS_TTL = 3600e3, REFRESH_TTL = 90 * 864e5, CODE_TTL = 5 * 60e3;
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const sha = (s) => createHash("sha256").update(s).digest("base64url");
@@ -28,6 +31,7 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
   let db = null;
   try { if (existsSync(FILE)) db = JSON.parse(open(readFileSync(FILE, "utf8"))); } catch {}
   db ??= { clients: {}, access: {}, refresh: {} };
+  db.sites ??= {}; // sha(token) → { login, email, from, manage }: a site agent's grant (spec #16), until switched off
   const save = () => writeFileSync(FILE, seal(JSON.stringify(db)), { mode: 0o600 });
   const barTokens = new Map(); // email → { token, exp }: a Supabase session minted like /cloud/open's handoff
   const codes = new Map(); // code → { client, redirect_uri, challenge, login, email, exp }
@@ -123,11 +127,11 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
 
     if (path === "/mcp") {
       const tok = /^Bearer (.+)$/.exec(req.headers.authorization ?? "")?.[1];
-      const g = tok && db.access[sha(tok)];
-      if (!g || g.exp < Date.now()) return (json(res, 401, { error: "invalid_token" }, { "WWW-Authenticate": `Bearer resource_metadata="${BASE}/.well-known/oauth-protected-resource"` }), true);
+      const g = tok && (db.access[sha(tok)] ?? db.sites[sha(tok)]);
+      if (!g || g.exp < Date.now() || (g.from && !load().some((i) => i.id === g.from && i.email === g.email))) return (json(res, 401, { error: "invalid_token" }, { "WWW-Authenticate": `Bearer resource_metadata="${BASE}/.well-known/oauth-protected-resource"` }), true);
       await fresh(g.login);
       for (const [k, v] of Object.entries(CORS)) res.setHeader(k, v);
-      const server = tools({ login: g.login, email: g.email }, req);
+      const server = tools({ login: g.login, email: g.email }, req, g.from ? { from: g.from, manage: !!g.manage } : null);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       res.on("close", () => { transport.close(); server.close(); });
       await server.connect(transport);
@@ -136,6 +140,18 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
     }
     return false;
   }, {
+    /** A grant for `inst`'s own agent (spec #16), replacing any earlier one. Returns the token. */
+    grant(inst, manage) {
+      this.revoke(inst.id);
+      const token = randomBytes(32).toString("base64url");
+      db.sites[sha(token)] = { login: inst.login, email: inst.email, from: inst.id, manage: !!manage };
+      save();
+      return token;
+    },
+    revoke(id) {
+      for (const [h, v] of Object.entries(db.sites)) if (v.from === id) delete db.sites[h];
+      save();
+    },
     // Whether this user has Claude connected: an unexpired grant to a client that registered as Claude.
     claude: (login) => Object.values(db.refresh).some((g) => g.login === login && g.exp > Date.now() && /claude/i.test(db.clients[g.client]?.client_name ?? "")),
   });
@@ -204,7 +220,7 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
   }
 
   // ---- tools ----
-  function tools(s, req) {
+  function tools(s, req, agent) {
     // Call a /cloud/ route as this user and return its JSON (errors become tool errors).
     async function call(method, path, b = null) {
       const out = { code: 200, body: null };
@@ -249,9 +265,16 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
     const find = async (id) => (await sites()).find((i) => i.id === id) ?? Promise.reject(new Error(`No site ${id}. Call list_sites.`));
 
     const server = new McpServer({ name: "agent-keyboard", version: "1.0.0" }, {
-      instructions: `Agent Keyboard puts a prompt bar on a website; a Claude Code session behind it edits the site's repo and ships. These tools set it up and manage it for the signed-in user, the same as ${BASE}/start and ${BASE}/dashboard. To change a site itself, use send_message: it goes to that site's own agent, like typing in its bar (get_reply waits for longer edits; read_conversation shows the history). Setup order: connect_cloudflare, list_repos, start_setup, then setup_status until done (it says what the user does at each step). Never ask the user to paste a token, password or code into the chat: those go on ${BASE}/start.`,
+      instructions: agent ? `These tools reach the user's other Agent Keyboard sites. You are the agent of site ${agent.from}. read_conversation shows another site's recent conversation; send_message asks that site's own agent for a change (it edits and ships that site's repo); list_sites lists them all.${agent.manage ? " You may also restart, update or delete sites, manage their domains and teammates: confirm anything destructive with the user first." : ""}` : `Agent Keyboard puts a prompt bar on a website; a Claude Code session behind it edits the site's repo and ships. These tools set it up and manage it for the signed-in user, the same as ${BASE}/start and ${BASE}/dashboard. To change a site itself, use send_message: it goes to that site's own agent, like typing in its bar (get_reply waits for longer edits; read_conversation shows the history). Setup order: connect_cloudflare, list_repos, start_setup, then setup_status until done (it says what the user does at each step). Never ask the user to paste a token, password or code into the chat: those go on ${BASE}/start.`,
     });
 
+    if (agent) {
+      const reg = server.registerTool.bind(server);
+      server.registerTool = (name, def, fn) => {
+        if (!SITE_TOOLS.includes(name) && !(agent.manage && MANAGE_TOOLS.includes(name))) return;
+        return reg(name, def, (args, extra) => (console.log("mcp", agent.from, name, args?.site ?? ""), fn(args, extra)));
+      };
+    }
     server.registerTool("whoami", { description: "The signed-in Agent Keyboard account: GitHub login, email, Cloudflare connection, number of sites, and any setup in progress.", annotations: { readOnlyHint: true } }, async () => {
       const me = await call("GET", "/cloud/me");
       return text({ login: me.login, email: me.email, cloudflare: me.cloudflare ?? "not connected (call connect_cloudflare)", sites: (await sites()).length, setup: me.flow?.step ?? "none" });
@@ -316,7 +339,9 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
         photos: z.array(z.string()).max(4).optional().describe("Images for the agent (screenshots, mockups): https URLs, or base64 image data (a data:image/...;base64, URL or raw base64)."),
       },
     }, async ({ site: id, message, photos = [] }) => {
+      if (agent && id === agent.from) throw new Error("That's this site. Do the change yourself; send_message is for the user's other sites.");
       const inst = await mine(id);
+      if (agent) message = `[from your ${agent.from} agent] ${message}`;
       const attachmentIds = [];
       for (const p of photos) {
         const form = new FormData();

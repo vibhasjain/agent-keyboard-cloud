@@ -70,6 +70,7 @@ export function sprites({ sprites_api, sprites_token }) {
     create: (name) => call("POST", "/sprites", { name }).then((d) => d.data ?? d),
     remove: (name) => call("DELETE", `/sprites/${name}`),
     setPublic: (name) => call("PUT", `/sprites/${name}`, { url_settings: { auth: "public" } }),
+    createConnection: (body) => call("POST", "/oauth/connections/custom_api", body).then((d) => d.connection ?? d.data ?? d),
     connections: () => call("GET", "/oauth/connections").then((d) => d.connections ?? d.data ?? d),
     removeConnection: (id) => call("DELETE", `/oauth/connections/${id}`),
     setPolicy: (id, namePrefix) => call("PUT", `/oauth/connections/${id}`, { access_policy: { name_prefix: namePrefix } }),
