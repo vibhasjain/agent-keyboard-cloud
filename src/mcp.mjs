@@ -35,6 +35,10 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
   db.sites ??= {}; // sha(token) → { login, email, from, talk, manage }: a site agent's grant (spec #16), until switched off
   const save = () => writeFileSync(FILE, seal(JSON.stringify(db)), { mode: 0o600 });
   const barTokens = new Map(); // email → { token, exp }: a Supabase session minted like /cloud/open's handoff
+  const sent = new Map(); // site id → [{ text, at, job }]: relayed messages, so read_conversation shows them before the agent picks them up
+  // A tool call must answer well inside the proxies in front of /mcp (Netlify, the Sprites gateway): past them the caller
+  // gets an empty error even though the message went through. Longer waits continue in get_reply.
+  const WAIT = 20e3;
   const codes = new Map(); // code → { client, redirect_uri, challenge, login, email, exp }
 
   const json = (res, code, body, headers = {}) => (res.writeHead(code, { "Content-Type": "application/json", "Cache-Control": "no-store", ...CORS, ...headers }), res.end(JSON.stringify(body)));
@@ -309,12 +313,12 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
       },
     }, async ({ repo, domain, name }) => text(describe(await call("POST", "/cloud/start", repo ? { repo, domain, via: "mcp" } : { name, via: "mcp" }))));
     server.registerTool("setup_status", { description: "Where the setup in progress is, and what the user should do next.", annotations: { readOnlyHint: true } }, async () => text(describe(await call("GET", "/cloud/start"))));
-    server.registerTool("list_sites", { description: "The user's Agent Keyboard sites: status, repo, URLs, hosting and domain.", annotations: { readOnlyHint: true } }, async () =>
+    server.registerTool("list_sites", { description: "The user's Agent Keyboard sites: status, repo, URLs, hosting and domain. its_agent says what THAT site's own agent may do to the other sites; it doesn't limit messaging that site, which works for any of them.", annotations: { readOnlyHint: true } }, async () =>
       text((await sites()).map((i) => ({
         site: i.id, name: i.siteId, status: i.status, repo: i.repo,
         url: i.customDomain?.status === "active" ? `https://${i.customDomain.host}` : i.pages?.staging ?? i.pages?.live ?? i.url,
         staged: !!i.staging, hosting: i.pages?.state === "live" ? "Cloudflare Pages" : i.pages?.state ? `Cloudflare Pages: ${i.pages.state}${i.pages.error ? ` (${i.pages.error})` : ""}` : "not on Pages",
-        domain: i.pages?.state === "live" ? domainText(i) : undefined, teammates: i.team ?? [], auto_update: i.autoUpdate !== false, email: mailText(i), moved_from: i.previous ? { from: i.previous.origin, state: i.migrate?.state ?? `not asked yet (bring it over: ${BASE}/cloud/import/${i.id})`, report: i.migrate?.report ?? i.migrate?.error } : undefined, agent: { talk: !!i.mcp?.talk, manage: !!i.mcp?.manage }, open_signed_in: open(i.id), created: i.createdAt?.slice(0, 10), via: i.via ?? "web",
+        domain: i.pages?.state === "live" ? domainText(i) : undefined, teammates: i.team ?? [], auto_update: i.autoUpdate !== false, email: mailText(i), moved_from: i.previous ? { from: i.previous.origin, state: i.migrate?.state ?? `not asked yet (bring it over: ${BASE}/cloud/import/${i.id})`, report: i.migrate?.report ?? i.migrate?.error } : undefined, its_agent: { can_message_other_sites: !!i.mcp?.talk, can_manage_other_sites: !!i.mcp?.manage }, open_signed_in: open(i.id), created: i.createdAt?.slice(0, 10), via: i.via ?? "web",
       }))));
     server.registerTool("site_action", {
       description: "restart or update a site's Sprite, (re)host it on Cloudflare Pages (pages), commit the bar's script tag to its index.html (tag), start fresh instead of bringing an older bar's notes over (import-skip), or delete it (removes the Sprite and its Claude connector from the user's Fly account; the repo stays).",
@@ -334,7 +338,7 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
       const talk = agent_talk ?? !!i.mcp?.talk, manage = agent_manage ?? !!i.mcp?.manage;
       if (talk !== !!i.mcp?.talk || manage !== !!i.mcp?.manage) await call("POST", `/cloud/instances/${i.id}/mcp`, { talk, manage });
       const n = await find(id);
-      return text({ site: n.id, auto_update: n.autoUpdate !== false, agent: { talk: !!n.mcp?.talk, manage: !!n.mcp?.manage } });
+      return text({ site: n.id, auto_update: n.autoUpdate !== false, its_agent: { can_message_other_sites: !!n.mcp?.talk, can_manage_other_sites: !!n.mcp?.manage } });
     });
     server.registerTool("connect_resend", { description: "Check the Resend connection (needed for setup_email; connected once for all sites, like Cloudflare). If missing, returns the page where the user pastes their key.", annotations: { readOnlyHint: true } }, async () => {
       const me = await call("GET", "/cloud/me");
@@ -375,7 +379,7 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
     });
     const mine = (id) => load().find((i) => i.id === id && i.email === s.email) ?? Promise.reject(new Error(`No site ${id}. Call list_sites.`));
     server.registerTool("send_message", {
-      description: "Ask a site's own agent (the Claude Code session behind its bar) to change the site, the same as typing in the bar: it edits the repo, commits and pushes, and the site redeploys. Shares the bar's conversation. Waits about 45 seconds; if the agent isn't done, returns a job id for get_reply.",
+      description: "Ask a site's own agent (the Claude Code session behind its bar) to change the site, the same as typing in the bar: it edits the repo, commits and pushes, and the site redeploys. Shares the bar's conversation. Waits about 20 seconds; if the agent isn't done, returns a job id for get_reply. Never resend because a reply is slow: read_conversation shows whether it arrived.",
       inputSchema: {
         site,
         message: z.string().min(1).max(20000).describe("The request, in the user's words."),
@@ -391,27 +395,36 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
         form.append("photo", await photo(p), "photo");
         attachmentIds.push((await bar(inst, `/sites/${inst.siteId}/uploads`, { method: "POST", body: form })).id);
       }
+      const entry = { text: message, at: Date.now(), job: null };
+      sent.set(inst.id, [...(sent.get(inst.id) ?? []).filter((x) => Date.now() - x.at < 15 * 60e3), entry]);
       // The response is the job's SSE stream; take the job id and detach (the job keeps running).
-      const res = await bar(inst, `/sites/${inst.siteId}/messages`, {
-        method: "POST", raw: true, headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: message, page: "/", attachmentIds, idemKey: randomUUID() }),
-      });
-      const rd = res.body.getReader(), dec = new TextDecoder();
-      let buf = "", job;
-      while (!job) {
-        const { value, done } = await rd.read();
-        if (done) break;
-        job = (buf += dec.decode(value, { stream: true })).match(/event: job\ndata: (.*)\n/)?.[1];
-      }
-      rd.cancel().catch(() => {});
-      if (!job) throw new Error(`${id}: the bar didn't start a job`);
-      return text(await reply(inst, JSON.parse(job).job_id, 45e3));
+      // A sleeping Sprite can take longer than WAIT to answer, so don't wait for it past the deadline.
+      const jobP = (async () => {
+        const res = await bar(inst, `/sites/${inst.siteId}/messages`, {
+          method: "POST", raw: true, headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: message, page: "/", attachmentIds, idemKey: randomUUID() }),
+        });
+        const rd = res.body.getReader(), dec = new TextDecoder();
+        let buf = "", job;
+        while (!job) {
+          const { value, done } = await rd.read();
+          if (done) break;
+          job = (buf += dec.decode(value, { stream: true })).match(/event: job\ndata: (.*)\n/)?.[1];
+        }
+        rd.cancel().catch(() => {});
+        if (!job) throw new Error(`${id}: the bar didn't start a job`);
+        return (entry.job = JSON.parse(job).job_id);
+      })();
+      jobP.catch((e) => (entry.error = e.message));
+      const job = await Promise.race([jobP, new Promise((r) => setTimeout(r, Math.max(0, entry.at + WAIT - Date.now())))]);
+      if (!job) return text(`Sent. ${id} is waking up, so its agent hasn't started on it yet. Don't send it again: call read_conversation on ${id} in a minute, which shows the message as queued (with its job id for get_reply) until the reply is in.`);
+      return text(await reply(inst, job, Math.max(0, entry.at + WAIT - Date.now())));
     });
     server.registerTool("get_reply", {
-      description: "Keep waiting (about 45 seconds) for the reply to a send_message that was still working.",
+      description: "Keep waiting (about 20 seconds) for the reply to a send_message that was still working.",
       inputSchema: { site, job: z.string().regex(/^[\w-]+$/).describe("The job id send_message returned.") },
       annotations: { readOnlyHint: true },
-    }, async ({ site: id, job }) => text(await reply(await mine(id), job, 45e3)));
+    }, async ({ site: id, job }) => text(await reply(await mine(id), job, WAIT)));
     server.registerTool("read_conversation", {
       description: "The recent messages between the user and a site's agent (from the bar or send_message), oldest first.",
       inputSchema: { site, limit: z.number().int().min(1).max(50).optional().describe("How many messages (default 20).") },
@@ -419,7 +432,12 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
     }, async ({ site: id, limit = 20 }) => {
       const inst = await mine(id);
       const { messages } = await bar(inst, `/sites/${inst.siteId}/conversation?limit=${limit}`);
-      return text(messages.filter((m) => m.text).map((m) => `${m.role}${m.ts ? ` (${m.ts.slice(0, 16).replace("T", " ")})` : ""}: ${m.text}`).join("\n\n") || "No messages yet.");
+      // Relayed messages the agent hasn't written to its transcript yet (still waking, queued or just starting).
+      const pending = (sent.get(inst.id) ?? []).filter((x) => Date.now() - x.at < 15 * 60e3 && !messages.some((m) => m.role === "user" && m.text?.includes(x.text.slice(0, 200))));
+      return text([
+        ...messages.filter((m) => m.text).map((m) => `${m.role}${m.ts ? ` (${m.ts.slice(0, 16).replace("T", " ")})` : ""}: ${m.text}`),
+        ...pending.map((x) => `user (${new Date(x.at).toISOString().slice(0, 16).replace("T", " ")}, ${x.error ? `not delivered: ${x.error}` : `sent, the agent hasn't picked it up yet${x.job ? `; get_reply job ${x.job}` : ""}`}): ${x.text}`),
+      ].join("\n\n") || "No messages yet.");
     });
     server.registerTool("open_site", { description: "A link that opens the site already signed in to the bar (in a browser signed in at agentkeyboard.com).", inputSchema: { site }, annotations: { readOnlyHint: true } }, async ({ site: id }) => text(`Open ${open((await find(id)).id)} to use the bar on it.`));
     return server;
