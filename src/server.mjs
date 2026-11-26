@@ -272,18 +272,20 @@ async function latest() {
   return latestCache.v;
 }
 // Auto-update (on unless the owner turned it off): hourly, each Sprite behind the latest version reinstalls,
-// skipping any that is running a job (a Claude CLI turn) so nothing is cut off; it tries again next hour.
+// skipping any that is running a job (a Claude CLI turn) so nothing is cut off; it tries again in 5 minutes.
 async function autoUpdate() {
   const version = await latest();
+  let busy = false;
   for (const inst of load().filter((i) => i.autoUpdate !== false && i.version !== version)) {
     try {
       const { out } = await sprites(await mint(open(inst.assertion))).exec(inst.id, `if cat /proc/[0-9]*/cmdline 2>/dev/null | tr '\\0' ' ' | grep -q 'output-forma[t] stream-json'; then echo AK_BUSY; else ${INSTALL}; fi`);
-      if (out.includes("AK_BUSY")) continue;
+      if (out.includes("AK_BUSY")) { busy = true; console.log("autoupdate", inst.id, "busy, retrying in 5 min"); continue; }
       const cur = load().find((i) => i.id === inst.id);
       if (cur) upsert({ ...cur, ref: REF, version });
       console.log("autoupdate", inst.id, version);
     } catch (e) { console.error("autoupdate", inst.id, e.message); }
   }
+  if (busy) setTimeout(tick, 300e3).unref(); // a busy Sprite gets another try soon, not at the next hourly pass
 }
 let updating = null; // one pass at a time (the hourly timer and a release ping can coincide)
 const tick = () => (updating ??= autoUpdate().catch((e) => console.error("autoupdate", e.message)).finally(() => { updating = null; }));
