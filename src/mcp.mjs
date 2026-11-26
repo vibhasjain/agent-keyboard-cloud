@@ -303,7 +303,7 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
         site: i.id, name: i.siteId, status: i.status, repo: i.repo,
         url: i.customDomain?.status === "active" ? `https://${i.customDomain.host}` : i.pages?.staging ?? i.pages?.live ?? i.url,
         staged: !!i.staging, hosting: i.pages?.state === "live" ? "Cloudflare Pages" : i.pages?.state ? `Cloudflare Pages: ${i.pages.state}${i.pages.error ? ` (${i.pages.error})` : ""}` : "not on Pages",
-        domain: i.pages?.state === "live" ? domainText(i) : undefined, teammates: i.team ?? [], open_signed_in: open(i.id), created: i.createdAt?.slice(0, 10), via: i.via ?? "web",
+        domain: i.pages?.state === "live" ? domainText(i) : undefined, teammates: i.team ?? [], auto_update: i.autoUpdate !== false, agent: { talk: !!i.mcp?.talk, manage: !!i.mcp?.manage }, open_signed_in: open(i.id), created: i.createdAt?.slice(0, 10), via: i.via ?? "web",
       }))));
     server.registerTool("site_action", {
       description: "restart or update a site's Sprite, (re)host it on Cloudflare Pages (pages), commit the bar's script tag to its index.html (tag), or delete it (removes the Sprite and its Claude connector from the user's Fly account; the repo stays).",
@@ -313,6 +313,17 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
       if (action === "delete" && confirm !== true) return text(`Deleting ${id} removes its Sprite and Claude connector from the user's Fly account (the repo stays). Ask the user to confirm, then call again with confirm: true.`);
       const r = await call("POST", `/cloud/instances/${id}/${action}`, {});
       return text(action === "tag" ? `Added the tag to ${r.path}.` : action === "pages" ? "Setting up Cloudflare Pages; check list_sites in a minute." : `${id}: ${action} done.`);
+    });
+    server.registerTool("site_settings", {
+      description: "A site's Advanced settings, as on the dashboard: auto_update (update the Sprite with each Agent Keyboard release), agent_talk (its agent may read and message the user's other sites' agents) and agent_manage (its agent may manage the user's sites, this one too). Omitted fields stay as they are; list_sites shows the current values.",
+      inputSchema: { site, auto_update: z.boolean().optional(), agent_talk: z.boolean().optional(), agent_manage: z.boolean().optional() },
+    }, async ({ site: id, auto_update, agent_talk, agent_manage }) => {
+      const i = await find(id);
+      if (auto_update != null && auto_update !== (i.autoUpdate !== false)) await call("POST", `/cloud/instances/${i.id}/autoupdate`, {});
+      const talk = agent_talk ?? !!i.mcp?.talk, manage = agent_manage ?? !!i.mcp?.manage;
+      if (talk !== !!i.mcp?.talk || manage !== !!i.mcp?.manage) await call("POST", `/cloud/instances/${i.id}/mcp`, { talk, manage });
+      const n = await find(id);
+      return text({ site: n.id, auto_update: n.autoUpdate !== false, agent: { talk: !!n.mcp?.talk, manage: !!n.mcp?.manage } });
     });
     server.registerTool("add_domain", { description: "Serve a site (hosted on Cloudflare Pages) at the user's own domain. Returns what's left to do, if anything.", inputSchema: { site, host: z.string().describe("e.g. www.example.com") } }, async ({ site: id, host }) => {
       await call("POST", `/cloud/instances/${id}/domain`, { host });
