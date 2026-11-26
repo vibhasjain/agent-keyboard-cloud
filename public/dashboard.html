@@ -95,27 +95,27 @@ function cfForm(me) {
     <p class="small">Your token goes into your repo's GitHub Actions secrets, where the deploy workflow uses it, and is kept encrypted here to set up your other sites. Revoke it any time on Cloudflare's token page.</p></div>`;
 }
 
-// Use a different Claude account: its own slot outside #app (re-renders would wipe it); polls the server's background switch.
+// Reconnect Claude: its own slot outside #app (re-renders would wipe it); polls the server's background switch.
 let clTimer;
 async function claudeSwitch(start) {
   clearTimeout(clTimer);
   const slot = document.getElementById("clslot");
   let st;
   try { st = await api("claude/switch", start ? {} : undefined); } catch (e) { st = { step: "error", error: e.message }; }
-  const card = (body) => `<div class="card"><h2>Use a different Claude account</h2>${body}</div>`;
+  const card = (body) => `<div class="card"><h2>Reconnect Claude</h2>${body}</div>`;
   const cancel = `<div class="row"><button class="btn ghost" type="button" id="clx">Close</button></div>`;
   if (st.step === "starting") slot.innerHTML = card(`<p>Getting a sign-in link…</p>`);
   else if (st.step === "code") {
     if (slot.querySelector("#clf")) return;
-    slot.innerHTML = card(`<p>Sign in to claude.ai with the account your sites should use, then paste the code it shows. Each site restarts once, which stops any job running on it.</p>
+    slot.innerHTML = card(`<p>Sign in to claude.ai (with another account if you want to switch), then paste the code it shows. Each site restarts once, which stops any job running on it.</p>
       <a class="btn" href="${esc(st.url)}" target="_blank" rel="noopener">Sign in to Claude</a>
-      <form id="clf"><label for="clc">Code from Claude</label><input id="clc" type="password" autocomplete="off" spellcheck="false" required><div class="row"><button class="btn">Switch</button><button class="btn ghost" type="button" id="clx">Cancel</button></div></form>`);
+      <form id="clf"><label for="clc">Code from Claude</label><input id="clc" type="password" autocomplete="off" spellcheck="false" required><div class="row"><button class="btn">Reconnect</button><button class="btn ghost" type="button" id="clx">Cancel</button></div></form>`);
     slot.querySelector("#clf").onsubmit = (e) => {
       e.preventDefault();
       api("claude/switch", { code: slot.querySelector("#clc").value }).then(() => claudeSwitch(), (err) => { slot.querySelector(".err")?.remove(); slot.querySelector("#clf").insertAdjacentHTML("beforeend", `<p class="err">${esc(err.message)}</p>`); });
     };
-  } else if (st.step === "switching") slot.innerHTML = card(`<p>Switching your sites to the new Claude account…</p>`);
-  else if (st.step === "done") slot.innerHTML = card(`<p>Done. Your sites now use the new Claude account.</p>${st.failed?.length ? `<p class="err">Couldn&apos;t switch ${esc(st.failed.join(", "))}: they still use the old account. Try again.</p>` : ""}${cancel}`);
+  } else if (st.step === "switching") slot.innerHTML = card(`<p>Reconnecting your sites to Claude…</p>`);
+  else if (st.step === "done") slot.innerHTML = card(`<p>Done. Your sites are reconnected to Claude.</p>${st.failed?.length ? `<p class="err">Couldn&apos;t reconnect ${esc(st.failed.join(", "))}: they still use the old connection. Try again.</p>` : ""}${cancel}`);
   else if (st.step === "error") slot.innerHTML = card(`<p class="err">${esc(st.error)}</p>${cancel}`);
   else return (slot.innerHTML = "");
   slot.querySelector("#clx")?.addEventListener("click", () => { clearTimeout(clTimer); slot.innerHTML = ""; });
@@ -152,7 +152,7 @@ async function render(note) {
         <div class="meta"><label class="auto perm" title="It can read your other sites' conversations and start one with their agents to ask for changes. Only on your messages, not teammates'.">Allow this agent to talk with your other sites' agents<button class="switch" role="switch" aria-checked="${!!i.mcp && i.mcp.talk !== false}" data-a="mcp-talk"></button></label></div>
         <div class="meta"><label class="auto perm" title="Restart, update or delete any of your sites, this one included, and manage their domains and teammates. It confirms destructive steps with you first.">Allow it to manage your Agent Keyboard sites, this one too<button class="switch" role="switch" aria-checked="${!!i.mcp?.manage}" data-a="mcp-manage"></button></label></div>${i.mail || (i.pages?.state === "live" && i.customDomain?.status === "active") ? mail(i, me) : ""}${team(i)}</details><div class="tools"><button class="btn ghost round" data-a="restart" title="Restart (only needed if the bar is stuck)" aria-label="Restart">${ICON.restart}</button><button class="btn ghost round danger" data-a="delete" title="Delete site" aria-label="Delete site"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/></svg></button></div><a class="btn primary" href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener">Open site</a></div>
     </div>`;
-  }).join("") + (list.length ? `<p class="small hint">Bar not showing? Open from here to enable.</p>` : "") + `${me.cloudflare ? `<p class="small acct">Cloudflare: connected (${esc(me.cloudflare)}) · <a href="#" id="cfre">Use a different token</a> · <a href="#" id="cfx">Disconnect</a></p>` : ""}${me.resend ? `<p class="small acct">Resend: connected (${esc(me.resend)}) · <a href="#" id="rsre">Use a different key</a> · <a href="#" id="rsx-acct">Disconnect</a></p>` : ""}${me.claudeAccount ? `<p class="small acct">Claude: connected · <a href="#" id="clre">Use a different Claude account</a></p>` : ""}<div id="cfslot"></div>`;
+  }).join("") + (list.length ? `<p class="small hint">Bar not showing? Open from here to enable.</p>` : "") + `${me.cloudflare ? `<p class="small acct">Cloudflare: connected (${esc(me.cloudflare)}) · <a href="#" id="cfre">Use a different token</a> · <a href="#" id="cfx">Disconnect</a></p>` : ""}${me.resend ? `<p class="small acct">Resend: connected (${esc(me.resend)}) · <a href="#" id="rsre">Use a different key</a> · <a href="#" id="rsx-acct">Disconnect</a></p>` : ""}${me.claudeAccount ? `<p class="small acct">Claude: connected · <a href="#" id="clre">Reconnect Claude</a></p>` : ""}<div id="cfslot"></div>`;
   for (const id of advanced()) $app.querySelector(`.inst[data-id="${CSS.escape(id)}"] details.more`)?.setAttribute("open", "");
   clearTimeout(timer);
   if (list.some((i) => i.pages?.state === "setting up" || i.mail?.status === "setting up")) timer = setTimeout(() => render(note), 3000);

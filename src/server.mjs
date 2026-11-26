@@ -162,7 +162,7 @@ async function runFly(flow) {
   }
 }
 
-// Use a different Claude account: a fresh sign-in on the LOGIN Sprite, a new connector, every site's
+// Reconnect Claude (same or another account): a fresh sign-in on the LOGIN Sprite, a new connector, every site's
 // ANTHROPIC_BASE_URL pointed at it (one restart each), then the old connector removed. Runs in the
 // background (it outlasts the proxy's timeout); the dashboard polls GET /cloud/claude/switch.
 const switches = new Map(); // email → { step: "starting" | "code" | "switching" | "done" | "error", url, error, failed }
