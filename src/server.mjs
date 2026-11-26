@@ -681,6 +681,24 @@ const routes = {
     send(res, 200, { ok: true });
   },
 
+  // Delete my account, once every site is deleted: the shared Claude connector, then every credential and record we keep for this user.
+  "POST /cloud/account/delete": async (q, req, res, s) => {
+    if (!s) return send(res, 401, { error: "Sign in" });
+    if (load().some((i) => i.email === s.email)) return send(res, 400, { error: "Delete your sites first" });
+    if (["install", "connector"].includes(flows.get(s.email)?.step)) return send(res, 409, { error: "A site is being set up. Let it finish and delete it first" });
+    const a = accts.get(s.email);
+    let warning = null;
+    if (a?.claude && a.assertion) await mint(a.assertion).then((c) => sprites(c).removeConnection(a.claude)).catch((e) => { if (e.status !== 404) warning = "We couldn't remove the Agent Keyboard Claude connector from your Fly account. Delete it there yourself."; });
+    flows.delete(s.email);
+    if (accts.delete(s.email)) writeFileSync(ACCT, seal(JSON.stringify(Object.fromEntries(accts))), { mode: 0o600 });
+    if (cfs.delete(s.email)) saveCfs();
+    if (resends.delete(s.email)) saveResends();
+    if (users.delete(s.login)) saveUsers();
+    mcpServer.forget(s.login, s.email);
+    res.setHeader("Set-Cookie", `akc=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`);
+    send(res, 200, { ok: true, warning });
+  },
+
   "GET /cloud/instances": async (q, req, res, s) => {
     if (!s) return send(res, 401, { error: "Sign in" });
     send(res, 200, { instances: await Promise.all(load().filter((i) => i.email === s.email).map(status)), latest: await latest().catch(() => null) });

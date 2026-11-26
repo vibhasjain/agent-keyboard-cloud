@@ -149,6 +149,12 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
       save();
       return token;
     },
+    // Delete my account: every Claude grant and site-agent grant of this user.
+    forget(login, email) {
+      for (const k of ["access", "refresh"]) for (const [h, v] of Object.entries(db[k])) if (v.login === login) delete db[k][h];
+      for (const [h, v] of Object.entries(db.sites)) if (v.email === email) delete db.sites[h];
+      save();
+    },
     revoke(id) {
       for (const [h, v] of Object.entries(db.sites)) if (v.from === id) delete db.sites[h];
       save();
