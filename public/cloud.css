@@ -57,6 +57,6 @@ pre{ font:13px/1.5 var(--mono); white-space:pre-wrap; word-break:break-all; back
 .switch:focus-visible{ outline:2px solid rgba(255,184,107,.5); outline-offset:2px; } .switch:disabled{ opacity:.5; }
 @media (prefers-reduced-motion:reduce){ .switch,.switch::after{ transition:none; } }
 .head h2{ display:flex; align-items:center; gap:6px; min-width:0; } .head h2 a{ color:var(--ink); overflow-wrap:anywhere; } .head h2 a:hover{ color:var(--amber); }
-.dot.bad{ background:var(--err); } .note{ margin:0 0 4px; } .acct{ margin-top:22px; }
+.dot.bad{ background:var(--err); } .note{ margin:0 0 4px; } .acct{ margin-top:22px; display:flex; flex-wrap:wrap; justify-content:space-between; gap:4px 12px; }
 .danger{ gap:6px; border:0; background:none; padding:11px 4px; font:500 15px var(--sans); color:var(--err); cursor:pointer; display:inline-flex; align-items:center; } .danger:hover{ opacity:.8; } .danger:disabled{ opacity:.5; cursor:default; }
 .more{ margin-top:12px; } .more summary{ font-size:13px; color:var(--ink-3); cursor:pointer; width:max-content; } .more summary:hover{ color:var(--ink-2); }
