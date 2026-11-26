@@ -13,8 +13,9 @@ import { z } from "zod";
 
 // A site agent (spec #16) gets the relay tools; the manage tools only when allowed; never the setup tools.
 const SITE_TOOLS = ["whoami", "list_sites", "domain_status"]; // with either switch
-const TALK_TOOLS = ["read_conversation", "send_message", "get_reply"];
+const TALK_TOOLS = ["read_conversation", "send_message", "get_reply", "list_events", "wait_for_event"];
 const MANAGE_TOOLS = ["site_action", "add_domain", "remove_domain", "invite_teammate", "remove_teammate"];
+const EVENT_TYPES = ["job.done", "job.failed", "push", "sandbox.created", "sandbox.published", "sandbox.archived"];
 const ACCESS_TTL = 3600e3, REFRESH_TTL = 90 * 864e5, CODE_TTL = 5 * 60e3;
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const sha = (s) => createHash("sha256").update(s).digest("base64url");
@@ -327,14 +328,26 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
     });
     server.registerTool("site_settings", {
       description: "A site's Advanced settings, as on the dashboard: auto_update (update the Sprite with each Agent Keyboard release), agent_talk (its agent may read and message the user's other sites' agents) and agent_manage (its agent may manage the user's sites, this one too). Omitted fields stay as they are; list_sites shows the current values.",
-      inputSchema: { site, auto_update: z.boolean().optional(), agent_talk: z.boolean().optional(), agent_manage: z.boolean().optional() },
-    }, async ({ site: id, auto_update, agent_talk, agent_manage }) => {
+      inputSchema: {
+        site, auto_update: z.boolean().optional(), agent_talk: z.boolean().optional(), agent_manage: z.boolean().optional(),
+        webhook: z.object({
+          url: z.string().describe("https URL that gets a signed POST per event (a hooks.slack.com URL gets a one-line Slack message)"),
+          events: z.array(z.enum(EVENT_TYPES)).optional().describe("Default: all"),
+          remove: z.boolean().optional(),
+        }).optional().describe("Add (or replace) or remove one webhook. Payloads carry the ask and a reply excerpt. A new hook's signing secret is returned once: give it to the user."),
+      },
+    }, async ({ site: id, auto_update, agent_talk, agent_manage, webhook }) => {
       const i = await find(id);
+      let hook = null;
+      if (webhook) {
+        const inst = await mine(id);
+        hook = await bar(inst, `/sites/${inst.siteId}/webhooks`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(webhook) });
+      }
       if (auto_update != null && auto_update !== (i.autoUpdate !== false)) await call("POST", `/cloud/instances/${i.id}/autoupdate`, {});
       const talk = agent_talk ?? !!i.mcp?.talk, manage = agent_manage ?? !!i.mcp?.manage;
       if (talk !== !!i.mcp?.talk || manage !== !!i.mcp?.manage) await call("POST", `/cloud/instances/${i.id}/mcp`, { talk, manage });
       const n = await find(id);
-      return text({ site: n.id, auto_update: n.autoUpdate !== false, agent: { talk: !!n.mcp?.talk, manage: !!n.mcp?.manage } });
+      return text({ site: n.id, auto_update: n.autoUpdate !== false, agent: { talk: !!n.mcp?.talk, manage: !!n.mcp?.manage }, ...(hook ? { webhooks: hook.webhooks, ...(hook.secret ? { new_webhook_secret: `${hook.secret} (shown once; the receiver checks X-AK-Signature "t=<unix>,v1=<hex HMAC-SHA256 of '<t>.<body>'>")` } : {}) } : {}) });
     });
     server.registerTool("connect_resend", { description: "Check the Resend connection (needed for setup_email; connected once for all sites, like Cloudflare). If missing, returns the page where the user pastes their key.", annotations: { readOnlyHint: true } }, async () => {
       const me = await call("GET", "/cloud/me");
@@ -375,7 +388,7 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
     });
     const mine = (id) => load().find((i) => i.id === id && i.email === s.email) ?? Promise.reject(new Error(`No site ${id}. Call list_sites.`));
     server.registerTool("send_message", {
-      description: "Ask a site's own agent (the Claude Code session behind its bar) to change the site, the same as typing in the bar: it edits the repo, commits and pushes, and the site redeploys. Shares the bar's conversation. Waits about 45 seconds; if the agent isn't done, returns a job id for get_reply.",
+      description: "Ask a site's own agent (the Claude Code session behind its bar) to change the site, the same as typing in the bar: it edits the repo, commits and pushes, and the site redeploys. Shares the bar's conversation. Waits about 45 seconds; if the agent isn't done, returns a job id for get_reply. To be told when it has pushed (or a later change lands), loop on wait_for_event { types: [\"push\"] }.",
       inputSchema: {
         site,
         message: z.string().min(1).max(20000).describe("The request, in the user's words."),
@@ -412,6 +425,38 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
       inputSchema: { site, job: z.string().regex(/^[\w-]+$/).describe("The job id send_message returned.") },
       annotations: { readOnlyHint: true },
     }, async ({ site: id, job }) => text(await reply(await mine(id), job, 45e3)));
+    // Site events (spec 21): job.done, job.failed, push, sandbox.*; each id is also a cursor.
+    const evText = (out, more) => text({ events: out.events.map((e) => ({ id: e.id, type: e.type, at: e.at, ...e.data })), cursor: out.cursor, ...(more ? { note: more } : {}) });
+    server.registerTool("list_events", {
+      description: "A site's recent events, oldest first: job.done (a turn finished: ask, reply excerpt), job.failed, push (branch, commit, message), sandbox.created / sandbox.published / sandbox.archived. Returns a cursor for wait_for_event.",
+      inputSchema: { site, after: z.string().optional().describe("Only events after this cursor") },
+      annotations: { readOnlyHint: true },
+    }, async ({ site: id, after = "" }) => {
+      const inst = await mine(id);
+      return evText(await bar(inst, `/sites/${inst.siteId}/events?after=${encodeURIComponent(after)}`));
+    });
+    server.registerTool("wait_for_event", {
+      description: "Wait (up to timeout_s, max 50) for the next event on a site, e.g. types [\"push\"] after send_message to learn the commit. Pass the cursor from list_events or the last call; without one, waits for anything new from now. Returns the first matching event, or nothing yet with the cursor to call again.",
+      inputSchema: {
+        site,
+        after: z.string().optional(),
+        types: z.array(z.enum(EVENT_TYPES)).optional(),
+        timeout_s: z.number().int().min(1).max(50).optional(),
+      },
+      annotations: { readOnlyHint: true },
+    }, async ({ site: id, after, types, timeout_s = 45 }) => {
+      const inst = await mine(id);
+      const path = (c, w) => `/sites/${inst.siteId}/events?after=${encodeURIComponent(c)}&wait=${w}`;
+      let cursor = after ?? (await bar(inst, path("", 0))).cursor;
+      for (const end = Date.now() + timeout_s * 1000; ;) {
+        const left = Math.ceil((end - Date.now()) / 1000);
+        if (left <= 0) return evText({ events: [], cursor }, `Nothing yet. Call wait_for_event again with after: "${cursor}".`);
+        const out = await bar(inst, path(cursor, left));
+        const hit = out.events.find((e) => !types?.length || types.includes(e.type));
+        if (hit) return evText({ events: [hit], cursor: hit.id });
+        cursor = out.cursor;
+      }
+    });
     server.registerTool("read_conversation", {
       description: "The recent messages between the user and a site's agent (from the bar or send_message), oldest first.",
       inputSchema: { site, limit: z.number().int().min(1).max(50).optional().describe("How many messages (default 20).") },
