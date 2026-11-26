@@ -25,9 +25,9 @@ async function gh(token, method, path, body) {
 
 export const getRepo = (token, fullName) => gh(token, "GET", `/repos/${fullName}`);
 
-/** A new public repo under the token's user, holding just `files` ({path: content}). */
+/** A new private repo under the token's user, holding just `files` ({path: content}). */
 export async function createRepo(token, name, description, files) {
-  const repo = await gh(token, "POST", "/user/repos", { name, description, auto_init: false });
+  const repo = await gh(token, "POST", "/user/repos", { name, description, private: true, auto_init: false });
   for (const [path, content] of Object.entries(files)) {
     await gh(token, "PUT", `/repos/${repo.full_name}/contents/${path}`, {
       message: `Starter site: ${path}`,
