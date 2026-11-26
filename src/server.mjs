@@ -325,7 +325,7 @@ async function handoff(inst, email) {
   const token = d.hashed_token ?? d.properties?.hashed_token;
   return token ? `${site}/#ak_handoff=${encodeURIComponent(token)}` : site;
 }
-// Spec #16: "Let this agent use your other sites". A grant in a Custom API connector for BASE (this Sprite only):
+// Spec #16: "Allow this agent to talk with your other sites' agents". A grant in a Custom API connector for BASE (this Sprite only):
 // the Sprite's egress adds it, so the token never reaches the Sprite. ~/ak-mcp.json points Claude Code at the
 // gateway; the Sprite server passes it only to owners' turns. A marked line in ~/.claude/CLAUDE.md says what it's for.
 const MCP_NOTE = "<!-- ak-mcp -->";
