@@ -2,7 +2,7 @@
 // the bar for one site. With `repo` the user brings their site and gets a script tag;
 // without it we create a starter repo. Every site is then hosted on Cloudflare Pages (server.mjs).
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mint, sprites } from "./fly.mjs";
 import { addDeployKey, createRepo, getRepo, isBlank, putFile } from "./github.mjs";
 
@@ -108,6 +108,7 @@ export async function provision(opts, progress = () => {}) {
 
   const live = repo.default_branch || "main";
   const site = { id: siteId, repo: repo.ssh_url, branch: live, domain };
+  const feedbackKey = randomBytes(24).toString("hex");
   const env = {
     PORT: "8080",
     AGENT_DATA_DIR: "/data",
@@ -119,6 +120,7 @@ export async function provision(opts, progress = () => {}) {
     ALLOWED_EMAIL: email,
     AK_RECOVER_URL: "https://agentkeyboard.com/dashboard", // the bar's "forgot password?"
     AK_INTERNAL_SECRET: randomBytes(24).toString("hex"),
+    AK_FEEDBACK_KEY: feedbackKey, // spec 23: lets its agent send us bug reports (we store only the hash)
     ANTHROPIC_BASE_URL: `https://api.sprites.dev/v1/gateway/custom_api/${conn.id}`,
     CLAUDE_CODE_OAUTH_TOKEN: "placeholder", // the connector swaps in the real token
     // A blank repo is hosted on the Sprite for now; let the bar work once its own domain points here.
@@ -148,7 +150,7 @@ export async function provision(opts, progress = () => {}) {
   progress("bar: sign-in account");
   await ensureBarUser(supabase, email);
 
-  return { sprite: name, url, siteId, repo: repo.full_name, domain, connection: conn.id, tag: scriptTag(url, siteId), starter };
+  return { sprite: name, url, siteId, repo: repo.full_name, domain, connection: conn.id, tag: scriptTag(url, siteId), starter, feedback: createHash("sha256").update(feedbackKey).digest("hex") };
 }
 
 /** The bar signs in against our Supabase: create the account (confirmed, no email: sign-in is by handoff link) unless it exists. */

@@ -8,7 +8,7 @@
 
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { claudeLoginFinish, claudeLoginStart } from "./claude.mjs";
 import { mint, pollClaim, register, sprites } from "./fly.mjs";
 import { appReady, authorizeUrl, createdFromManifest, installationPage, installUrl, loadApp, manifest, refreshUser, signIn, userRepos } from "./githubapp.mjs";
@@ -235,7 +235,7 @@ async function runSite(flow) {
   );
   // A brought site gets the tag committed to its index.html; if there isn't one, the page shows it to paste.
   const { path: tagPath, previous } = r.starter ? { path: null, previous: null } : await addTag(user.token, r.repo, r.tag).catch(() => ({ path: null, previous: null }));
-  upsert({ id: r.sprite, tagPath, previous, email: flow.email, login: flow.login, siteId: r.siteId, repo: r.repo, domain: r.domain, url: r.url, connection: r.connection, starter: r.starter, tag: r.tag, via: flow.via, ref: REF, createdAt: new Date().toISOString(), assertion: seal(flow.assertion) });
+  upsert({ id: r.sprite, tagPath, previous, email: flow.email, login: flow.login, siteId: r.siteId, repo: r.repo, domain: r.domain, url: r.url, connection: r.connection, starter: r.starter, tag: r.tag, feedback: r.feedback, via: flow.via, ref: REF, createdAt: new Date().toISOString(), assertion: seal(flow.assertion) });
   flow.assertion = null;
   // Every site is hosted on Cloudflare Pages (connected before the flow starts).
   flow.detail = "hosting your site on Cloudflare Pages";
@@ -352,6 +352,36 @@ async function latest() {
   latestCache = { at: Date.now(), v: shas.join("+") };
   return latestCache.v;
 }
+// Spec 23: each Sprite holds AK_FEEDBACK_KEY so its agent can send us bug reports; we keep only the hash.
+// A Sprite without one gets it on its next (re)install: `cmd` writes it into ~/ak.env before INSTALL restarts the bar.
+const sha = (k) => createHash("sha256").update(k).digest("hex");
+function feedbackKey(inst) {
+  if (inst.feedback) return { cmd: "", hash: inst.feedback };
+  const k = randomBytes(24).toString("hex");
+  return { cmd: `{ grep -v '^AK_FEEDBACK_KEY=' ~/ak.env || true; } > ~/ak.env.new && echo AK_FEEDBACK_KEY=${k} >> ~/ak.env.new && chmod 600 ~/ak.env.new && mv ~/ak.env.new ~/ak.env && `, hash: sha(k) };
+}
+const feedbackCounts = new Map(); // instance → { day, n }
+async function feedback(req, res) {
+  const inst = load().find((i) => i.feedback && i.feedback === sha(String(req.headers["x-ak-feedback"] ?? "")));
+  if (!inst) return send(res, 401, { error: "unknown instance" });
+  let raw = "";
+  for await (const c of req) if ((raw += c).length > 25e3) return send(res, 413, { error: "too large" });
+  let f;
+  try { f = JSON.parse(raw); } catch { return send(res, 400, { error: "JSON body required" }); }
+  const str = (v, n) => (typeof v === "string" ? v : "").slice(0, n);
+  if (!str(f.title, 1).trim() || !str(f.body, 1).trim()) return send(res, 400, { error: "title and body required" });
+  const day = new Date().toISOString().slice(0, 10), c = feedbackCounts.get(inst.id);
+  const n = c?.day === day ? c.n + 1 : 1;
+  if (n > 20) return send(res, 429, { error: "20 reports a day per site; try again tomorrow" });
+  feedbackCounts.set(inst.id, { day, n });
+  const report = { id: `fb_${randomBytes(6).toString("hex")}`, instance: inst.id, site: str(f.site, 100) || inst.siteId, owner: inst.email, at: new Date().toISOString(), title: str(f.title, 120), body: str(f.body, 20e3), page: str(f.page, 300), sender: str(f.sender, 200) };
+  appendFileSync(`${DATA}/feedback.jsonl`, JSON.stringify(report) + "\n", { mode: 0o600 });
+  const r = await fetch(env.FEEDBACK_INBOX_URL ?? "https://agent-keyboard.fly.dev/sites/halo/feedback-inbox", {
+    method: "POST", headers: { "Content-Type": "application/json", "x-ak-feedback": env.FEEDBACK_INBOX_SECRET ?? "" }, body: JSON.stringify(report), signal: AbortSignal.timeout(20e3),
+  }).catch((e) => ({ ok: false, status: e.message }));
+  if (!r.ok) console.error("feedback inbox", report.id, r.status); // kept in feedback.jsonl either way
+  send(res, 200, { ok: true, id: report.id });
+}
 // Auto-update (on unless the owner turned it off): hourly, each Sprite behind the latest version reinstalls,
 // skipping any that is running a job (a Claude CLI turn) so nothing is cut off; it tries again in 5 minutes.
 async function autoUpdate() {
@@ -359,10 +389,11 @@ async function autoUpdate() {
   let busy = false;
   for (const inst of load().filter((i) => i.autoUpdate !== false && i.version !== version)) {
     try {
-      const { out } = await sprites(await mint(open(inst.assertion))).exec(inst.id, `if cat /proc/[0-9]*/cmdline 2>/dev/null | tr '\\0' ' ' | grep -q 'output-forma[t] stream-json'; then echo AK_BUSY; else ${INSTALL}; fi`);
+      const fk = feedbackKey(inst);
+      const { out } = await sprites(await mint(open(inst.assertion))).exec(inst.id, `if cat /proc/[0-9]*/cmdline 2>/dev/null | tr '\\0' ' ' | grep -q 'output-forma[t] stream-json'; then echo AK_BUSY; else ${fk.cmd}${INSTALL}; fi`);
       if (out.includes("AK_BUSY")) { busy = true; console.log("autoupdate", inst.id, "busy, retrying in 5 min"); continue; }
       const cur = load().find((i) => i.id === inst.id);
-      if (cur) upsert({ ...cur, ref: REF, version });
+      if (cur) upsert({ ...cur, ref: REF, version, feedback: fk.hash });
       console.log("autoupdate", inst.id, version);
     } catch (e) { console.error("autoupdate", inst.id, e.message); }
   }
@@ -378,9 +409,9 @@ async function act(inst, action) {
   const api = sprites(creds);
   if (action === "restart") await api.exec(inst.id, "sprite-env services restart ak", { timeoutMs: 60e3 });
   else if (action === "update") {
-    const version = await latest().catch(() => null);
-    await api.exec(inst.id, INSTALL);
-    upsert({ ...(load().find((i) => i.id === inst.id) ?? inst), ref: REF, version });
+    const version = await latest().catch(() => null), fk = feedbackKey(inst);
+    await api.exec(inst.id, fk.cmd + INSTALL);
+    upsert({ ...(load().find((i) => i.id === inst.id) ?? inst), ref: REF, version, feedback: fk.hash });
   } else if (action === "delete") {
     await api.remove(inst.id).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
     // The Claude connector is shared by the user's sites: it stays while the account or another site uses it.
@@ -996,6 +1027,7 @@ createServer(async (req, res) => {
   try {
     if (s) await fresh(s.login);
     if (await mcpServer(req, res, u, s)) return;
+    if (req.method === "POST" && u.pathname === "/cloud/feedback") return await feedback(req, res); // its own 20 KB body cap
     await dispatch(req, res, u, s, req.method === "POST" ? await body(req) : null);
   } catch (e) {
     console.error(req.method, u.pathname, e.message);
