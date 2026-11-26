@@ -429,7 +429,7 @@ async function runImport(inst, auth) {
 function importReport(r, origin) {
   const host = new URL(origin).host;
   if (r.error) return r.error;
-  const what = r.notesOnly ? `${r.notes} notes (memory and settings need ${host} updated first)` : `${r.notes} notes, ${r.memories} memories, settings${r.skills?.length ? ` and ${r.skills.length} skills` : ""}`;
+  const what = r.notesOnly ? `${r.notes} notes (memory and settings need ${host} updated first)` : `${r.notes} notes, ${r.memories} memories, settings${r.skills?.length ? `, ${r.skills.length} skills` : ""}${r.sandboxes?.length ? ` and ${r.sandboxes.length} open sandboxes` : ""}`;
   return `Brought over ${what} from ${host}.${r.envNames?.length ? ` Paste these values again by asking the bar: ${r.envNames.join(", ")}.` : ""}`;
 }
 const page = (title, inner) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title><link rel="stylesheet" href="/cloud/cloud.css"></head><body><div class="wrap"><main class="card">${inner}</main></div></body></html>`;
