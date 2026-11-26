@@ -253,13 +253,16 @@ async function setupPages(id, ghToken, c) {
     const inst = load().find((x) => x.id === id);
     const token = open(c.token);
     set({ state: "setting up", detail: "creating the Pages project", error: null });
-    const live = (await getRepo(ghToken, inst.repo)).default_branch || "main";
-    const p = await ensureProject(token, c.accountId, inst.siteId, live);
-    set({ detail: "adding the deploy workflow to your repo", project: p.name, sub: p.subdomain });
-    await putSecret(ghToken, inst.repo, "CLOUDFLARE_API_TOKEN", token);
-    await putVariable(ghToken, inst.repo, "CLOUDFLARE_ACCOUNT_ID", c.accountId);
-    await putVariable(ghToken, inst.repo, "CLOUDFLARE_PAGES_PROJECT", p.name);
-    for (const b of inst.staging ? ["ak-staging", live] : [live]) await writeFile(ghToken, inst.repo, b, WORKFLOW_PATH, WORKFLOW, "Deploy to Cloudflare Pages (Agent Keyboard)");
+    const gr = await getRepo(ghToken, inst.repo), live = gr.default_branch || "main";
+    const p = await ensureProject(token, c.accountId, inst.siteId, live, { id: gr.id, owner: gr.owner?.login, name: gr.name });
+    set({ detail: p.git ? `using your Pages project ${p.name}` : "adding the deploy workflow to your repo", project: p.name, sub: p.subdomain, git: !!p.git });
+    // A project already Git-connected to the repo deploys every push itself: a workflow too would deploy twice.
+    if (!p.git) {
+      await putSecret(ghToken, inst.repo, "CLOUDFLARE_API_TOKEN", token);
+      await putVariable(ghToken, inst.repo, "CLOUDFLARE_ACCOUNT_ID", c.accountId);
+      await putVariable(ghToken, inst.repo, "CLOUDFLARE_PAGES_PROJECT", p.name);
+      for (const b of inst.staging ? ["ak-staging", live] : [live]) await writeFile(ghToken, inst.repo, b, WORKFLOW_PATH, WORKFLOW, "Deploy to Cloudflare Pages (Agent Keyboard)");
+    }
     set({ detail: "turning on sandboxes" });
     // The Sprite: sandbox previews on Pages, the Pages origins allowed to call the bar, and the agent's memory.
     const api = sprites(await mint(open(inst.assertion)));
@@ -269,7 +272,7 @@ async function setupPages(id, ghToken, c) {
     sites[0].sandbox = { preview: `https://{branch}.${p.subdomain}` };
     const extra = [...new Set([...had.split(",").filter(Boolean), `https://${p.subdomain}`, `https://ak-staging.${p.subdomain}`])].join(",");
     const lines = `SITES=${shq(JSON.stringify(sites))}\nEXTRA_ORIGINS=${shq(extra)}\nCLOUDFLARE_API_TOKEN=${shq(token)}\nCLOUDFLARE_ACCOUNT_ID=${shq(c.accountId)}\n`;
-    const memory = pagesMemory({ sub: p.subdomain, live, staging: inst.staging, domain: inst.customDomain?.host });
+    const memory = pagesMemory({ sub: p.subdomain, live, staging: inst.staging, domain: inst.customDomain?.host, git: p.git });
     await api.exec(id, [
       `grep -v -e '^SITES=' -e '^EXTRA_ORIGINS=' -e '^CLOUDFLARE_API_TOKEN=' -e '^CLOUDFLARE_ACCOUNT_ID=' ~/ak.env > ~/ak.env.new`,
       `printf %s ${shq(Buffer.from(lines).toString("base64"))} | base64 -d >> ~/ak.env.new`,
@@ -323,7 +326,7 @@ async function syncDomain(id, c, origin) {
   const { out } = await api.exec(id, `. ~/ak.env; printf '%s' "$EXTRA_ORIGINS"`, { timeoutMs: 60e3 });
   const had = out.trim().split(",").filter(Boolean);
   const lines = `EXTRA_ORIGINS=${shq([...new Set([...had, ...(origin ? [origin] : [])])].join(","))}\nCLOUDFLARE_API_TOKEN=${shq(open(c.token))}\nCLOUDFLARE_ACCOUNT_ID=${shq(c.accountId)}\n`;
-  const memory = pagesMemory({ sub: inst.pages.sub, live: inst.pages.branch ?? "main", staging: inst.staging, domain: inst.customDomain?.host });
+  const memory = pagesMemory({ sub: inst.pages.sub, live: inst.pages.branch ?? "main", staging: inst.staging, domain: inst.customDomain?.host, git: inst.pages.git });
   await api.exec(id, [
     `grep -v -e '^EXTRA_ORIGINS=' -e '^CLOUDFLARE_API_TOKEN=' -e '^CLOUDFLARE_ACCOUNT_ID=' ~/ak.env > ~/ak.env.new`,
     `printf %s ${shq(Buffer.from(lines).toString("base64"))} | base64 -d >> ~/ak.env.new`,
@@ -416,6 +419,7 @@ async function runImport(inst, auth) {
     const lines = out.trim().split("\n"), code = Number(lines.pop());
     const r = JSON.parse(lines.join("\n") || "{}");
     if (code !== 200) throw new Error(r.error ?? `import answered ${code}`);
+    r.applied = await applyMoved(api, inst.id, r).catch((e) => (console.error("import apply", inst.id, e.message), null));
     const report = importReport(r, inst.previous.origin);
     upsert({ ...cur(), migrate: { state: "done", result: r, report, at: new Date().toISOString() } });
     return { ...r, report };
@@ -425,12 +429,37 @@ async function runImport(inst, auth) {
     return { error: e.message };
   }
 }
+/** The old site's origins (CORS) and sandbox preview pattern, onto the Sprite: origins are added, a preview
+ *  only when it has none yet (Connect Cloudflare sets its own later). Returns what it applied. */
+async function applyMoved(api, id, r) {
+  const origins = (r.origins ?? []).filter((o) => /^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(o));
+  if (!origins.length && !r.sandboxPreview) return null;
+  const { out } = await api.exec(id, `. ~/ak.env; printf '%s\\n%s' "$SITES" "$EXTRA_ORIGINS"`, { timeoutMs: 60e3 });
+  const [sitesJson, had = ""] = out.trim().split("\n");
+  const sites = JSON.parse(sitesJson), was = had.split(",").filter(Boolean);
+  const preview = !sites[0].sandbox && r.sandboxPreview ? r.sandboxPreview : null;
+  if (preview) sites[0].sandbox = { preview };
+  const added = origins.filter((o) => !was.includes(o));
+  if (!added.length && !preview) return null;
+  const lines = `SITES=${shq(JSON.stringify(sites))}\nEXTRA_ORIGINS=${shq([...was, ...added].join(","))}\n`;
+  await api.exec(id, [
+    `grep -v -e '^SITES=' -e '^EXTRA_ORIGINS=' ~/ak.env > ~/ak.env.new`,
+    `printf %s ${shq(Buffer.from(lines).toString("base64"))} | base64 -d >> ~/ak.env.new`,
+    `chmod 600 ~/ak.env.new && mv ~/ak.env.new ~/ak.env`,
+    `sprite-env services restart ak`,
+  ].join(" && "), { timeoutMs: 120e3 });
+  return { origins: added, preview };
+}
 /** What came over, in a sentence (the popup, the dashboard and the MCP say the same). */
 function importReport(r, origin) {
   const host = new URL(origin).host;
   if (r.error) return r.error;
-  const what = r.notesOnly ? `${r.notes} notes (memory and settings need ${host} updated first)` : `${r.notes} notes, ${r.memories} memories, settings${r.skills?.length ? `, ${r.skills.length} skills` : ""}${r.sandboxes?.length ? ` and ${r.sandboxes.length} open sandboxes` : ""}`;
-  return `Brought over ${what} from ${host}.${r.envNames?.length ? ` Paste these values again by asking the bar: ${r.envNames.join(", ")}.` : ""}`;
+  const what = r.notesOnly ? `${r.notes} notes (memory and settings need ${host} updated first)` : `${r.notes} notes, ${r.memories} memories, settings${r.env?.length ? `, keys (${r.env.join(", ")})` : ""}${r.files ? `, ${r.files} working files` : ""}${r.skills?.length ? `, ${r.skills.length} skills` : ""}${r.sandboxes?.length ? ` and ${r.sandboxes.length} open sandboxes` : ""}`;
+  const a = r.applied;
+  return `Brought over ${what} from ${host}.` +
+    (a?.origins?.length ? ` The bar now also works on ${a.origins.map((o) => o.replace(/^https:\/\//, "")).join(", ")}.` : "") +
+    (a?.preview ? ` Sandboxes preview at ${a.preview}.` : "") +
+    (r.envNames?.length ? ` Paste these values again by asking the bar: ${r.envNames.join(", ")}.` : "");
 }
 const page = (title, inner) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title><link rel="stylesheet" href="/cloud/cloud.css"></head><body><div class="wrap"><main class="card">${inner}</main></div></body></html>`;
 const escH = (v) => String(v).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);

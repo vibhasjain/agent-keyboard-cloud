@@ -82,7 +82,7 @@ function previousOf(old) {
 
 /**
  * Put the bar's script tag on the site. Other Agent Keyboard bars (an older instance, or self-hosted)
- * are swapped for it on every .html page, keeping their data-* settings, so each page has one bar.
+ * are swapped for it on every .html page (and in code files that write the tag), keeping their data-* settings, so each page has one bar.
  * With none, it goes into the site's index.html before </body>. One commit. Returns { path: the first
  * page changed, previous: the replaced bar's { origin, siteId } or null }.
  */
@@ -94,7 +94,11 @@ export async function addTag(token, fullName, tag, branch) {
     return f?.content ? Buffer.from(f.content, "base64").toString("utf8") : null;
   };
   const { tree } = await gh(token, "GET", `/repos/${fullName}/git/trees/${encodeURIComponent(branch)}?recursive=1`);
-  const pages = tree.filter((t) => t.type === "blob" && /\.html?$/i.test(t.path) && !/(^|\/)node_modules\//.test(t.path)).slice(0, 300);
+  // Pages, and code that writes the tag itself (a Pages Function, a layout component…); not dependencies or build output.
+  const pages = tree
+    .filter((t) => t.type === "blob" && t.size < 512e3 && /\.(html?|[cm]?[jt]sx?|vue|svelte|astro|php|py|rb|go|liquid|njk|hbs|erb|ejs)$/i.test(t.path) && !/(^|\/)(node_modules|vendor|dist|build|out|\.next|\.svelte-kit|_site)\//.test(t.path) && !/\.min\.js$/.test(t.path))
+    .sort((a, b) => /\.html?$/i.test(b.path) - /\.html?$/i.test(a.path))
+    .slice(0, 300);
   const changes = {};
   let current = null, previous = null;
   for (const { path } of pages) {

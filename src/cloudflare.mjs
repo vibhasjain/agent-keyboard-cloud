@@ -39,9 +39,16 @@ export async function verify(token) {
   return { accountId: accounts[0].id, accountName: accountLabel(accounts[0].name) };
 }
 
-/** The Pages project `name` (Direct Upload), created if missing. Returns { name, subdomain } (subdomain = "x.pages.dev"). */
-export async function ensureProject(token, accountId, name, productionBranch) {
+/** The Pages project for `repo` ({ id, owner, name }): one already Git-connected to it (it builds every push and
+ *  branch itself, so git: true), else `name` (Direct Upload), created if missing. Returns { name, subdomain, git }. */
+export async function ensureProject(token, accountId, name, productionBranch, repo) {
   const path = `/accounts/${accountId}/pages/projects`;
+  for (let page = 1; repo && page <= 10; page++) {
+    const list = await cf(token, "GET", `${path}?per_page=50&page=${page}`).catch(() => []);
+    const c = (list ?? []).find(({ source: s }) => s?.type === "github" && (String(s.config?.repo_id ?? "") === String(repo.id) || `${s.config?.owner}/${s.config?.repo_name}`.toLowerCase() === `${repo.owner}/${repo.name}`.toLowerCase()));
+    if (c) return { name: c.name, subdomain: c.subdomain, git: true };
+    if ((list ?? []).length < 50) break;
+  }
   const p = (await cf(token, "GET", `${path}/${name}`).catch((e) => (e.status === 404 ? null : Promise.reject(e))))
     ?? (await cf(token, "POST", path, { name, production_branch: productionBranch }));
   return { name: p.name, subdomain: p.subdomain };
@@ -86,8 +93,8 @@ jobs:
 `;
 
 /** The Sprite agent's memory once the site is on Pages (replaces the Sprite-preview staging memory). */
-export function pagesMemory({ sub, live, staging, domain }) {
-  const hosting = `Every push deploys to Cloudflare Pages through the GitHub Actions workflow \`.github/workflows/agent-keyboard-pages.yml\` (about a minute after the push): \`${live}\` → https://${sub}${domain ? ` and the custom domain https://${domain} (the site's real address: use it in links, metadata and replies)` : ""}, any other branch → https://<branch>.${sub} (lowercase, \`/\` → \`-\`). Never remove that workflow. The site must build to static files (Pages Functions in \`functions/\` are fine); a database has to be hosted (e.g. Supabase), not on this machine.
+export function pagesMemory({ sub, live, staging, domain, git }) {
+  const hosting = `Every push deploys to Cloudflare Pages ${git ? "through the project's own Git integration (Cloudflare builds each push; there's no deploy workflow, don't add one)" : "through the GitHub Actions workflow \`.github/workflows/agent-keyboard-pages.yml\`"} (about a minute after the push): \`${live}\` → https://${sub}${domain ? ` and the custom domain https://${domain} (the site's real address: use it in links, metadata and replies)` : ""}, any other branch → https://<branch>.${sub} (lowercase, \`/\` → \`-\`). ${git ? "" : "Never remove that workflow. "}The site must build to static files (Pages Functions in \`functions/\` are fine); a database has to be hosted (e.g. Supabase), not on this machine.
 
 \`CLOUDFLARE_API_TOKEN\` and \`CLOUDFLARE_ACCOUNT_ID\` in your environment are the owner's Cloudflare token and account (Pages: Edit, DNS: Edit, Zone: Read, Account Settings: Read). Use them for DNS records on their zones and for this Pages project, never ask the owner for another token for those, and never print the token. They can't change redirect rules, page rules or other zone settings: for those, tell the owner exactly what to set in the Cloudflare dashboard.`;
   const managed = `# Managed by Agent Keyboard\n\nThis is a managed instance: it was set up and is managed at https://agentkeyboard.com/dashboard (or from Claude through the Agent Keyboard connector). You can't invite people, restart, update or delete this instance yourself. When the owner asks to add a teammate (or remove one), tell them to use Teammates on https://agentkeyboard.com/dashboard, or ask Claude with the Agent Keyboard connector (invite_teammate). They get a join link to send.\n`;
