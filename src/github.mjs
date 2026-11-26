@@ -63,28 +63,59 @@ export async function addDeployKey(token, fullName, title, key) {
   }
 }
 
-/** Commit the bar's script tag into the site's index.html, before </body>. Returns the path. */
+const OLD_BAR = /<script\b(?=[^>]*\/widget\.js["'])(?=[^>]*\bdata-site=)[^>]*>\s*<\/script>/gi;
+
+/** The new tag, carrying over the old tag's data-* settings it doesn't set itself (data-accent, data-theme…). */
+function mergeTag(tag, old) {
+  const extra = [...old.matchAll(/\s(data-[\w-]+)(?:=("[^"]*"|'[^']*'|[^\s>]+))?/g)]
+    .filter((m) => !new RegExp(`\\s${m[1]}[\\s=>]`).test(tag))
+    .map((m) => m[0])
+    .join("");
+  return tag.replace(/><\/script>$/, `${extra}></script>`);
+}
+
+/**
+ * Put the bar's script tag on the site. Other Agent Keyboard bars (an older instance, or self-hosted)
+ * are swapped for it on every .html page, keeping their data-* settings, so each page has one bar.
+ * With none, it goes into the site's index.html before </body>. One commit. Returns the first path.
+ */
 export async function addTag(token, fullName, tag, branch) {
-  const ref = branch ? `?ref=${encodeURIComponent(branch)}` : "";
-  for (const path of ["index.html", "public/index.html", "site/index.html", "docs/index.html", "src/index.html"]) {
-    const f = await gh(token, "GET", `/repos/${fullName}/contents/${path}${ref}`).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
-    if (!f?.content) continue;
-    const html = Buffer.from(f.content, "base64").toString("utf8");
-    if (html.includes(tag.match(/src="([^"]+)"/)[1])) return path; // already there
-    // Another Agent Keyboard bar (an older instance, or self-hosted): swap it, so the page has one bar.
-    const old = html.match(/<script\b(?=[^>]*\/widget\.js["'])(?=[^>]*\bdata-site=)[^>]*>\s*<\/script>/i);
-    const i = html.toLowerCase().lastIndexOf("</body>");
-    if (!old && i < 0) continue;
-    const next = old ? html.replace(old[0], tag) : `${html.slice(0, i)}${tag}\n${html.slice(i)}`;
-    await gh(token, "PUT", `/repos/${fullName}/contents/${path}`, {
-      message: "Add the Agent Keyboard bar",
-      content: Buffer.from(next).toString("base64"),
-      sha: f.sha,
-      ...(branch ? { branch } : {}),
-    });
-    return path;
+  branch ??= (await getRepo(token, fullName)).default_branch;
+  const src = tag.match(/src="([^"]+)"/)[1];
+  const read = async (path) => {
+    const f = await gh(token, "GET", `/repos/${fullName}/contents/${path}?ref=${encodeURIComponent(branch)}`).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
+    return f?.content ? Buffer.from(f.content, "base64").toString("utf8") : null;
+  };
+  const { tree } = await gh(token, "GET", `/repos/${fullName}/git/trees/${encodeURIComponent(branch)}?recursive=1`);
+  const pages = tree.filter((t) => t.type === "blob" && /\.html?$/i.test(t.path) && !/(^|\/)node_modules\//.test(t.path)).slice(0, 300);
+  const changes = {};
+  let current = null;
+  for (const { path } of pages) {
+    const html = await read(path);
+    if (!html) continue;
+    if (html.includes(src)) current ??= path;
+    const next = html.replace(OLD_BAR, (old) => (old.includes(src) ? old : mergeTag(tag, old)));
+    if (next !== html) changes[path] = next;
   }
-  throw Object.assign(new Error("Couldn't find an index.html with a </body> to add it to. Paste the tag into your pages yourself."), { code: 422 });
+  if (!Object.keys(changes).length) {
+    if (current) return current; // already there
+    for (const path of ["index.html", "public/index.html", "site/index.html", "docs/index.html", "src/index.html"]) {
+      const html = await read(path);
+      const i = html?.toLowerCase().lastIndexOf("</body>") ?? -1;
+      if (i >= 0) { changes[path] = `${html.slice(0, i)}${tag}\n${html.slice(i)}`; break; }
+    }
+  }
+  const paths = Object.keys(changes);
+  if (!paths.length) throw Object.assign(new Error("Couldn't find an index.html with a </body> to add it to. Paste the tag into your pages yourself."), { code: 422 });
+  const ref = await gh(token, "GET", `/repos/${fullName}/git/ref/heads/${branch}`);
+  const parent = await gh(token, "GET", `/repos/${fullName}/git/commits/${ref.object.sha}`);
+  const t = await gh(token, "POST", `/repos/${fullName}/git/trees`, {
+    base_tree: parent.tree.sha,
+    tree: paths.map((path) => ({ path, mode: "100644", type: "blob", content: changes[path] })),
+  });
+  const c = await gh(token, "POST", `/repos/${fullName}/git/commits`, { message: "Add the Agent Keyboard bar", tree: t.sha, parents: [ref.object.sha] });
+  await gh(token, "PATCH", `/repos/${fullName}/git/refs/heads/${branch}`, { sha: c.sha });
+  return paths[0];
 }
 
 /** An Actions secret, sealed to the repo's public key (libsodium sealed box, as GitHub requires). */
