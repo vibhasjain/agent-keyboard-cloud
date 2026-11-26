@@ -161,7 +161,7 @@ async function render(note) {
   $app.innerHTML = (note ? `<p class="note">${esc(note)}</p>` : "") + (me.cloudflare ? "" : cfForm(me)) + list.map((i) => {
     const behind = latest ? i.version !== latest : null, bad = !["running", "warm", "cold"].includes(i.status);
     return `
-    <div class="card inst" data-id="${esc(i.id)}">
+    <div class="card inst" data-id="${esc(i.id)}" data-adv="${esc(`${i.id}@${i.createdAt}`)}">
       <div class="head"><h2>${bad ? `<span class="dot bad" title="${esc(i.status)}"></span>` : ""}<a href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar">${esc(host(i))}</a>${i.pages?.state === "live" && i.customDomain?.status === "active" ? ` ${unlink(i.customDomain.host)}` : ""}</h2></div>
       <div class="meta"><a href="https://github.com/${esc(i.repo)}" target="_blank" rel="noopener">${esc(i.repo)}</a></div>
       <div class="meta upd"><span>${behind === null ? "" : behind ? `Agent Keyboard update available · <button class="link" data-a="update">Update now</button>` : "Agent Keyboard is up to date"}</span><label class="auto" title="Installs each new Agent Keyboard release when no job is running">Auto-update<button class="switch" role="switch" aria-checked="${i.autoUpdate !== false}" data-a="autoupdate" aria-label="Auto-update"></button></label></div>
@@ -175,7 +175,7 @@ async function render(note) {
         <div class="meta"><label class="auto perm" title="Restart, update or delete any of your sites, this one included, and manage their domains and teammates. It confirms destructive steps with you first.">Allow it to manage your Agent Keyboard sites, this one too<button class="switch" role="switch" aria-checked="${!!i.mcp?.manage}" data-a="mcp-manage"></button></label></div>${i.mail || (i.pages?.state === "live" && i.customDomain?.status === "active") ? mail(i, me) : ""}${team(i)}</details><div class="tools"><button class="btn ghost round" data-a="restart" title="Restart (only needed if the bar is stuck)" aria-label="Restart">${ICON.restart}</button><button class="btn ghost round danger" data-a="delete" title="Delete site" aria-label="Delete site"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/></svg></button></div><a class="btn primary" href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener">Open site</a></div>
     </div>`;
   }).join("") + (list.length ? `<p class="small hint">Bar not showing? Open from here to enable.</p>` : "") + `${me.cloudflare ? `<p class="small acct">Cloudflare: connected (${esc(me.cloudflare)})<span><a href="#" id="cfre">Use a different token</a> · <a href="#" id="cfx">Disconnect</a></span></p>` : ""}${me.resend ? `<p class="small acct">Resend: connected (${esc(me.resend)})<span><a href="#" id="rsre">Use a different key</a> · <a href="#" id="rsx-acct">Disconnect</a></span></p>` : ""}${me.claudeAccount ? `<p class="small acct">Claude: connected<span><a href="#" id="clre">Reconnect Claude</a></span></p>` : ""}<div id="cfslot"></div>`;
-  for (const id of advanced()) $app.querySelector(`.inst[data-id="${CSS.escape(id)}"] details.more`)?.setAttribute("open", "");
+  for (const id of advanced()) $app.querySelector(`.inst[data-adv="${CSS.escape(id)}"] details.more`)?.setAttribute("open", "");
   clearTimeout(timer);
   if (list.some((i) => i.pages?.state === "setting up" || i.mail?.status === "setting up")) timer = setTimeout(() => render(note), 3000);
   else if (list.some((i) => i.customDomain?.status === "pending")) timer = setTimeout(() => render(note), 30e3);
@@ -302,7 +302,7 @@ addEventListener("keydown", (e) => e.key === "Escape" && document.querySelectorA
 // Which cards have Advanced open survives re-renders and reloads.
 const advanced = () => { try { return JSON.parse(localStorage.getItem("ak-advanced")) ?? []; } catch { return []; } };
 $app.addEventListener("toggle", (e) => {
-  const id = e.target.matches?.("details.more") && e.target.closest(".inst")?.dataset.id;
+  const id = e.target.matches?.("details.more") && e.target.closest(".inst")?.dataset.adv; // per site and creation, so a re-added site starts collapsed
   if (id) localStorage.setItem("ak-advanced", JSON.stringify([...advanced().filter((x) => x !== id), ...(e.target.open ? [id] : [])]));
 }, true);
 let rev, events;
