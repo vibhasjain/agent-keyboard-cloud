@@ -262,7 +262,7 @@ async function setupPages(id, ghToken, c) {
       await putSecret(ghToken, inst.repo, "CLOUDFLARE_API_TOKEN", token);
       await putVariable(ghToken, inst.repo, "CLOUDFLARE_ACCOUNT_ID", c.accountId);
       await putVariable(ghToken, inst.repo, "CLOUDFLARE_PAGES_PROJECT", p.name);
-      await writeFile(ghToken, inst.repo, b, WORKFLOW_PATH, WORKFLOW, "Deploy to Cloudflare Pages (Agent Keyboard)");
+      await writeFile(ghToken, inst.repo, live, WORKFLOW_PATH, WORKFLOW, "Deploy to Cloudflare Pages (Agent Keyboard)");
     }
     set({ detail: "turning on sandboxes" });
     // The Sprite: sandbox previews on Pages, the Pages origins allowed to call the bar, and the agent's memory.
