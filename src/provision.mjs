@@ -23,7 +23,7 @@ export async function ensureSprite(api, name) {
 }
 
 export function scriptTag(spriteUrl, siteId) {
-  return `<script src="${spriteUrl}/widget.js" data-site="${siteId}" defer></script>`;
+  return `<script src="${spriteUrl}/widget.js" data-site="${siteId}" data-summon="signed-out" defer></script>`;
 }
 
 const STAGING = "ak-staging";
