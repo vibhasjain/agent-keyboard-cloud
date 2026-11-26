@@ -401,17 +401,24 @@ async function setupEmail(id) {
     // In Cloudflare we write full names; elsewhere the user gets Resend's own (relative) names, as on resend.com.
     const records = (d.records ?? []).map((r) => ({ type: r.type, name: zone ? fqdn(r.name, domain) : r.name, content: r.value, ...(r.priority != null ? { priority: r.priority } : {}) }));
     if (zone) { setMail(id, { detail: "adding its DNS records to Cloudflare" }); await addRecords(token, zone.id, records); }
-    if (inst.mail?.keyId) await deleteKey(key, inst.mail.keyId).catch(() => {});
-    const k = await sendingKey(key, d.id, `Agent Keyboard (${inst.siteId})`);
-    setMail(id, { domainId: d.id, keyId: k.id, detail: "installing it on your Sprite" });
-    await emailOnSprite(inst, { token: k.token, domain });
-    if (d.status !== "verified") await verifyDomain(key, d.id).catch(() => {});
-    setMail(id, { status: d.status === "verified" ? "active" : "verifying", detail: "", from: `notify@${domain}`, records: zone ? null : records, since: Date.now() });
-    if (d.status !== "verified") watchEmail(id);
+    setMail(id, { domainId: d.id, from: `notify@${domain}`, records: zone ? null : records, since: Date.now() });
+    if (d.status === "verified") return await installEmail(id);
+    await verifyDomain(key, d.id).catch(() => {});
+    setMail(id, { status: "verifying", detail: "" });
+    watchEmail(id);
   } catch (e) {
     console.error("email", id, e.message);
     setMail(id, { status: "error", detail: "", error: e.message });
   }
+}
+/** Once the domain is verified: a sending key on the Sprite. Not before, so the bar never offers email that Resend would refuse. */
+async function installEmail(id) {
+  const inst = load().find((x) => x.id === id), key = resendKey(inst.email);
+  if (inst.mail.keyId) await deleteKey(key, inst.mail.keyId).catch(() => {});
+  const k = await sendingKey(key, inst.mail.domainId, `Agent Keyboard (${inst.siteId})`);
+  setMail(id, { keyId: k.id, detail: "installing it on your Sprite" });
+  await emailOnSprite(inst, { token: k.token, domain: inst.mail.domain });
+  setMail(id, { status: "active", detail: "", records: null });
 }
 /** Poll Resend until the domain verifies (every 30 s, asking it to re-check every 5 min); Resend gives up after 72 h. Resumes at boot. */
 async function watchEmail(id) {
@@ -420,7 +427,7 @@ async function watchEmail(id) {
     const i = load().find((x) => x.id === id), key = i && resendKey(i.email);
     if (i?.mail?.status !== "verifying" || !key) return;
     const now = (await getDomain(key, i.mail.domainId).catch(() => null))?.status;
-    if (now === "verified") return setMail(id, { status: "active", records: null });
+    if (now === "verified") return installEmail(id).catch((e) => setMail(id, { status: "error", detail: "", error: e.message }));
     if (now === "failed" || Date.now() - (i.mail.since ?? 0) > 72 * 3600e3) return setMail(id, { status: "error", error: `Resend couldn't verify ${i.mail.domain}. Check its DNS records, then set up email again.` });
     if (t % 10 === 0) await verifyDomain(key, i.mail.domainId).catch(() => {});
   }
