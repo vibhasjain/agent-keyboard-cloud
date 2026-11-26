@@ -18,6 +18,7 @@ p{ color:var(--ink-2); margin-bottom:14px; } .small{ font-size:13px; color:var(-
 .link{ border:0; background:none; padding:0; font:inherit; color:var(--amber); cursor:pointer; } .link:hover{ text-decoration:underline; } .link:disabled{ color:var(--ink-3); cursor:default; text-decoration:none; } .row.actions:empty{ display:none; }
 .upd{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .team{ border-top:1px solid var(--rule-2); margin-top:18px; padding-top:16px; }
+.foot .more summary{ line-height:41px; } /* the Open site button's height, so Advanced sits in the same place open or closed */
 .foot{ display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-top:16px; } .foot .more{ margin:0; } .foot .more[open]{ flex-basis:100%; } .foot .btn.primary{ margin-left:auto; }
 .tools{ display:flex; gap:10px; } .foot .more:not([open]) + .tools{ display:none; } .btn.round{ width:44px; height:44px; padding:0; justify-content:center; } .btn.ghost.danger{ color:var(--err); } .btn.ghost.danger:hover{ color:var(--err); border-color:var(--err); }
 .btn:disabled{ opacity:.5; cursor:default; }
