@@ -22,7 +22,7 @@ const api = async (path, body) => {
   if (!r.ok) throw new Error(d.error || "Something went wrong (" + r.status + ")");
   return d;
 };
-const LABEL = { restart: "Restarting…", update: "Updating… (about a minute)", delete: "Deleting…", tag: "Adding…", pages: "Starting…", "domain-remove": "Removing…" };
+const LABEL = { restart: "Restarting…", update: "Updating… (about a minute)", delete: "Deleting…", tag: "Adding…", pages: "Starting…", "domain-remove": "Removing…", "email-remove": "Removing…" };
 let timer;
 
 // Teammates: people who can sign in to this site's bar. Inviting returns a single-use join link to send them.
@@ -31,7 +31,7 @@ const team = (i) => `<form class="team"><label for="tm-${esc(i.id)}">Teammates</
 // Cloudflare Pages hosting (spec #13): where the site is served, its previews and sandboxes.
 function hosting(i, me) {
   const p = i.pages ?? {};
-  if (p.state === "live") return `${p.staging ? `<div class="meta">Live at <a href="${esc(p.live)}" target="_blank" rel="noopener">${esc(p.live.replace("https://", ""))}</a></div>` : ""}${domain(i)}`;
+  if (p.state === "live") return `${p.staging ? `<div class="meta">Live at <a href="${esc(p.live)}" target="_blank" rel="noopener">${esc(p.live.replace("https://", ""))}</a></div>` : ""}${domain(i)}${i.customDomain?.status === "active" ? mail(i) : ""}`;
   if (p.state === "setting up") return `<div class="meta">Cloudflare Pages: ${esc(p.detail || "setting up")}…</div>`;
   const err = p.state === "error" ? `<p class="err">${esc(p.error)}</p>${p.permsUrl ? `<div class="row"><a class="btn ghost" href="${esc(p.permsUrl)}" target="_blank" rel="noopener">Review permissions on GitHub</a></div>` : ""}` : "";
   return me.cloudflare ? `${err}<div class="meta">Not on Cloudflare Pages yet.</div>` : "";
@@ -63,6 +63,16 @@ function domain(i) {
   else if (d.apex) how = `A root domain needs its DNS on Cloudflare (free). <a href="https://dash.cloudflare.com/?to=/:account/add-site" target="_blank" rel="noopener">Add ${esc(d.host)} to Cloudflare</a>, then switch its nameservers at your registrar to the two Cloudflare shows. We point it at your site as soon as it appears. Or use a subdomain like www.${esc(d.host)} instead.`;
   else how = `At your DNS provider, add this record:</div><pre>CNAME  ${esc(d.host)}  →  ${esc(sub)}</pre><div class="meta">${d.now === sub ? "✓ Found it." : `✗ Not there yet${d.now ? ` (it points to ${esc(d.now)})` : ""}.`} Then Cloudflare issues the certificate.`;
   return `<div class="meta"><b>${esc(d.host)}</b> ${rm} · ${how} We check every 30 seconds.</div>${err}`;
+}
+// Email from the site's own domain (spec #17): offered once the custom domain is active.
+function mail(i) {
+  const m = i.mail, rm = `<button class="icon" data-a="email-remove" title="Stop sending email" aria-label="Stop sending email"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>`;
+  if (m?.status === "setting up") return `<div class="meta">Email: ${esc(m.detail || "setting up")}…</div>`;
+  if (m?.status === "active") return `<div class="meta">Email: sending from <b>${esc(m.from)}</b> ✓ ${rm}</div>`;
+  if (m?.status === "verifying") return `<div class="meta">Email: Resend is verifying <b>${esc(m.domain)}</b> ${rm} · ${m.records ? `Add these records at your DNS provider:</div><pre>${m.records.map((r) => `${esc(r.type)}  ${esc(r.name)}  ${r.priority != null ? `${esc(r.priority)} ` : ""}${esc(r.content)}`).join("\n")}</pre><div class="meta">` : "We added its DNS records in Cloudflare; this usually takes a few minutes. "}Emails send from <b>${esc(m.from)}</b> once it's verified.</div>`;
+  return `<form class="mail"><label for="rk-${esc(i.id)}">Send email from ${esc(i.customDomain.host.replace(/^www\./, ""))} (optional)</label>
+    <p class="small">Lets the bar email teammates you @mention, and your site's agent send email for the site (a contact form, say). <a href="https://resend.com/signup" target="_blank" rel="noopener">Sign up for Resend</a> (free), then <a href="https://resend.com/api-keys" target="_blank" rel="noopener">create an API key</a> with Full access and paste it here. We use it once to add your domain and its DNS records, then keep only a key that can send from this domain.</p>
+    <div class="row"><input id="rk-${esc(i.id)}" type="password" placeholder="re_…" autocomplete="off" spellcheck="false" required><button class="btn ghost">Set up email</button></div>${m?.status === "error" ? `<p class="err">${esc(m.error)}</p>` : ""}</form>`;
 }
 function cfForm(me) {
   return `<div class="card" id="cf"><h2>Connect Cloudflare</h2>${me.cloudflare ? "" : `<p>Your sites are hosted on Cloudflare Pages in your own account: fast, a preview for every change, sandboxes, and your own domain. Connect it once for all of them.</p>`}
@@ -106,7 +116,7 @@ async function render(note) {
   }).join("") + `<div class="row"><a class="btn ghost" href="/start">Add another site</a>${claudeBtn(me)}</div>${me.cloudflare ? `<p class="small acct">Cloudflare: connected (${esc(me.cloudflare)}) · <a href="#" id="cfre">Use a different token</a></p>` : ""}<div id="cfslot"></div>`;
   for (const id of advanced()) $app.querySelector(`.inst[data-id="${CSS.escape(id)}"] details.more`)?.setAttribute("open", "");
   clearTimeout(timer);
-  if (list.some((i) => i.pages?.state === "setting up")) timer = setTimeout(() => render(note), 3000);
+  if (list.some((i) => i.pages?.state === "setting up" || i.mail?.status === "setting up")) timer = setTimeout(() => render(note), 3000);
   else if (list.some((i) => i.customDomain?.status === "pending")) timer = setTimeout(() => render(note), 30e3);
   $app.querySelectorAll("form.dom").forEach((f) => (f.onsubmit = async (e) => {
     e.preventDefault();
@@ -114,6 +124,13 @@ async function render(note) {
     btn.disabled = true; btn.textContent = "Adding…";
     try { await api(`instances/${id}/domain`, { host: f.querySelector("input").value }); render(); }
     catch (err) { btn.disabled = false; btn.textContent = "Add domain"; f.querySelector(".err")?.remove(); f.insertAdjacentHTML("beforeend", `<p class="err">${esc(err.message)}</p>`); }
+  }));
+  $app.querySelectorAll("form.mail").forEach((f) => (f.onsubmit = async (e) => {
+    e.preventDefault();
+    const id = f.closest(".inst").dataset.id, btn = f.querySelector("button");
+    btn.disabled = true; btn.textContent = "Starting…";
+    try { await api(`instances/${id}/email`, { key: f.querySelector("input").value }); render(); }
+    catch (err) { btn.disabled = false; btn.textContent = "Set up email"; f.querySelector(".err")?.remove(); f.insertAdjacentHTML("beforeend", `<p class="err">${esc(err.message)}</p>`); }
   }));
   $app.querySelectorAll("form.team").forEach((f) => {
     const id = f.closest(".inst").dataset.id, btn = f.querySelector("button:not([data-email])");
@@ -166,7 +183,8 @@ async function render(note) {
   });
   $app.querySelectorAll("button[data-a]").forEach((b) => (b.onclick = async () => {
     const id = b.closest(".inst").dataset.id, a = b.dataset.a;
-    if (a === "domain-remove" && !confirm("Remove this domain from your Pages site? Its DNS record stays; delete it yourself if you no longer need it.")) return;
+    if (a === "domain-remove" && !confirm(`Remove this domain from your Pages site? Its DNS record stays; delete it yourself if you no longer need it.${b.closest(".inst").querySelector("[data-a=email-remove]") ? " Email from this domain stops too." : ""}`)) return;
+    if (a === "email-remove" && !confirm("Stop sending email from this domain? Then delete the key named \"Agent Keyboard\" on resend.com/api-keys (or it's deleted the next time you set up email here). The DNS records stay.")) return;
     // The switch flips in place (no note line, no disabled row); the re-render only adds or drops the Update button.
     if (a === "autoupdate") {
       b.setAttribute("aria-checked", b.getAttribute("aria-checked") !== "true");
@@ -183,7 +201,7 @@ async function render(note) {
     (b.closest(".row")?.querySelectorAll("button") ?? [b]).forEach((x) => (x.disabled = true));
     b.classList.remove("round"); // the progress label replaces the icon
     b.textContent = LABEL[a];
-    try { const r = await api(`instances/${id}/${a}`, {}); render(a === "delete" ? `Deleted ${id}.` : a === "domain-remove" ? "Removed the domain." : a === "tag" ? `Added the tag to ${r.path}. Your host redeploys from that commit.` : `${id}: ${a} done.`); }
+    try { const r = await api(`instances/${id}/${a}`, {}); render(a === "delete" ? `Deleted ${id}.` : a === "domain-remove" ? "Removed the domain." : a === "email-remove" ? "Email is off. Delete its key on resend.com/api-keys if you're done with it." : a === "tag" ? `Added the tag to ${r.path}. Your host redeploys from that commit.` : `${id}: ${a} done.`); }
     catch (e) { if (e.message === "Sign in with GitHub again") location.href = "/cloud/github/login?next=dashboard"; else render(e.message); }
   }));
 }

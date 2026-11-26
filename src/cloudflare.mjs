@@ -146,3 +146,13 @@ async function doh(name, type) {
 export const isApex = async (host) => (await doh(host, "SOA")).some((a) => a.type === 6 && a.name === host);
 /** What `host` is a CNAME for right now, or null. */
 export const cnameOf = async (host) => (await doh(host, "CNAME")).find((a) => a.type === 5)?.data ?? null;
+
+/** Add DNS records (email's MX/TXT) to a zone, skipping any already there. Never deletes anything. */
+export async function addRecords(token, zoneId, records) {
+  for (const r of records) {
+    const have = await cf(token, "GET", `/zones/${zoneId}/dns_records?name=${encodeURIComponent(r.name)}&type=${r.type}&per_page=50`);
+    const norm = (s) => String(s).replace(/^"|"$/g, "");
+    if (have.some((h) => norm(h.content) === norm(r.content))) continue;
+    await cf(token, "POST", `/zones/${zoneId}/dns_records`, { ...r, proxied: false, ttl: 1 });
+  }
+}

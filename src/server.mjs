@@ -14,8 +14,9 @@ import { mint, pollClaim, register, sprites } from "./fly.mjs";
 import { appReady, authorizeUrl, createdFromManifest, installationPage, installUrl, loadApp, manifest, refreshUser, signIn, userRepos } from "./githubapp.mjs";
 import { mcp } from "./mcp.mjs";
 import { addTag, getRepo, putSecret, putVariable, writeFile } from "./github.mjs";
-import { TOKEN_URL, WORKFLOW, addPagesDomain, cnameOf, ensureProject, findZone, isApex, pagesDomain, pagesMemory, pointDns, removePagesDomain, verify, accountLabel } from "./cloudflare.mjs";
+import { TOKEN_URL, WORKFLOW, addPagesDomain, addRecords, cnameOf, ensureProject, findZone, isApex, pagesDomain, pagesMemory, pointDns, removePagesDomain, verify, accountLabel } from "./cloudflare.mjs";
 import { provision, slug, spriteName } from "./provision.mjs";
+import { deleteKey, ensureDomain, fqdn, getDomain, sendingKey, verifyDomain } from "./resend.mjs";
 
 const env = process.env;
 const DATA = env.DATA_DIR ?? "./data";
@@ -226,7 +227,7 @@ async function setupPages(id, ghToken, c) {
       `grep -v -e '^SITES=' -e '^EXTRA_ORIGINS=' -e '^CLOUDFLARE_API_TOKEN=' -e '^CLOUDFLARE_ACCOUNT_ID=' ~/ak.env > ~/ak.env.new`,
       `printf %s ${shq(Buffer.from(lines).toString("base64"))} | base64 -d >> ~/ak.env.new`,
       `chmod 600 ~/ak.env.new && mv ~/ak.env.new ~/ak.env`,
-      `mkdir -p ~/.claude && printf %s ${shq(Buffer.from(memory).toString("base64"))} | base64 -d > ~/.claude/CLAUDE.md`,
+      `mkdir -p ~/.claude && touch ~/.claude/CLAUDE.md && { grep '^<!-- ak-' ~/.claude/CLAUDE.md || true; } > ~/.ak-keep && printf %s ${shq(Buffer.from(memory).toString("base64"))} | base64 -d > ~/.claude/CLAUDE.md && sed 's/^/\\n/' ~/.ak-keep >> ~/.claude/CLAUDE.md`,
       `sprite-env services restart ak`,
     ].join(" && "), { timeoutMs: 120e3 });
     set({ state: "live", detail: "", branch: live, live: `https://${p.subdomain}`, staging: inst.staging ? `https://ak-staging.${p.subdomain}` : null });
@@ -274,7 +275,7 @@ async function syncDomain(id, c, origin) {
     `grep -v -e '^EXTRA_ORIGINS=' -e '^CLOUDFLARE_API_TOKEN=' -e '^CLOUDFLARE_ACCOUNT_ID=' ~/ak.env > ~/ak.env.new`,
     `printf %s ${shq(Buffer.from(lines).toString("base64"))} | base64 -d >> ~/ak.env.new`,
     `chmod 600 ~/ak.env.new && mv ~/ak.env.new ~/ak.env`,
-    `mkdir -p ~/.claude && printf %s ${shq(Buffer.from(memory).toString("base64"))} | base64 -d > ~/.claude/CLAUDE.md`,
+    `mkdir -p ~/.claude && touch ~/.claude/CLAUDE.md && { grep '^<!-- ak-' ~/.claude/CLAUDE.md || true; } > ~/.ak-keep && printf %s ${shq(Buffer.from(memory).toString("base64"))} | base64 -d > ~/.claude/CLAUDE.md && sed 's/^/\\n/' ~/.ak-keep >> ~/.claude/CLAUDE.md`,
     `sprite-env services restart ak`,
   ].join(" && "), { timeoutMs: 120e3 });
 }
@@ -371,6 +372,61 @@ async function siteMcp(inst, talk, manage) {
     `mkdir -p ~/.claude && touch ~/.claude/CLAUDE.md && sed -i '/${MCP_NOTE}/d' ~/.claude/CLAUDE.md`,
     on ? `printf '%s\n' ${shq(cfg)} > ~/ak-mcp.json && printf '\n%s\n' ${shq(note)} >> ~/.claude/CLAUDE.md` : "rm -f ~/ak-mcp.json",
   ].join(" && "), { timeoutMs: 60e3 });
+}
+// ---- email from the site's own domain (spec #17) ----
+// The pasted full-access Resend key stays in memory (this function's scope) and is never stored. With it: the domain
+// in Resend (the Cloudflare zone's root, e.g. example.com), its DNS records in that zone, and a sending-only key for that
+// one domain, which goes on the Sprite. We watch for verification up to an hour; Resend keeps checking after that.
+const EMAIL_NOTE = "<!-- ak-email -->";
+async function setupEmail(id, key) {
+  const set = (patch) => { const cur = load().find((x) => x.id === id); if (cur?.mail) upsert({ ...cur, mail: { ...cur.mail, ...patch } }); };
+  try {
+    const inst = load().find((x) => x.id === id), c = cfs.get(inst.email), token = open(c.token);
+    const zone = await findZone(token, c.accountId, inst.customDomain.host);
+    const domain = zone?.name ?? inst.customDomain.host.replace(/^www\./, "");
+    set({ domain, detail: "adding the domain to Resend" });
+    const d = await ensureDomain(key, domain);
+    // In Cloudflare we write full names; elsewhere the user gets Resend's own (relative) names, as on resend.com.
+    const records = (d.records ?? []).map((r) => ({ type: r.type, name: zone ? fqdn(r.name, domain) : r.name, content: r.value, ...(r.priority != null ? { priority: r.priority } : {}) }));
+    if (zone) { set({ detail: "adding its DNS records to Cloudflare" }); await addRecords(token, zone.id, records); }
+    for (const old of new Set([inst.mail?.keyId, inst.mailOldKey].filter(Boolean))) await deleteKey(key, old).catch(() => {});
+    const k = await sendingKey(key, d.id, `Agent Keyboard (${inst.siteId})`);
+    set({ domainId: d.id, keyId: k.id, detail: "installing it on your Sprite" });
+    await emailOnSprite(inst, { token: k.token, domain });
+    const cur = load().find((x) => x.id === id);
+    if (cur?.mail) upsert({ ...cur, mailOldKey: null });
+    if (d.status !== "verified") await verifyDomain(key, d.id).catch(() => {});
+    set({ status: d.status === "verified" ? "active" : "verifying", detail: "", from: `notify@${domain}`, records: zone ? null : records });
+    for (let t = 1; t <= 120 && d.status !== "verified"; t++) {
+      await new Promise((r) => setTimeout(r, 30e3));
+      if (load().find((x) => x.id === id)?.mail?.keyId !== k.id) return; // removed or redone meanwhile
+      const now = (await getDomain(key, d.id).catch(() => null))?.status;
+      if (now === "verified") return set({ status: "active", records: null });
+      if (t % 10 === 0) await verifyDomain(key, d.id).catch(() => {});
+    }
+  } catch (e) {
+    console.error("email", id, e.message);
+    set({ status: "error", detail: "", error: e.message });
+  }
+}
+/** Put the sending key on the Sprite (or take it off: e = null), with a line in the agent's memory, and restart the bar. */
+async function emailOnSprite(inst, e) {
+  const lines = e ? `RESEND_API_KEY=${shq(e.token)}\nEMAIL_FROM=${shq(`Agent Keyboard <notify@${e.domain}>`)}\n` : "";
+  const note = e && `${EMAIL_NOTE} RESEND_API_KEY (in the environment) sends email for this site through Resend's API, only from addresses at ${e.domain} (EMAIL_FROM is the default sender). It can't send from other domains or manage the Resend account.`;
+  await sprites(await mint(open(inst.assertion))).exec(inst.id, [
+    `{ grep -v -e '^RESEND_API_KEY=' -e '^EMAIL_FROM=' ~/ak.env || true; } > ~/ak.env.new`,
+    `printf %s ${shq(Buffer.from(lines).toString("base64"))} | base64 -d >> ~/ak.env.new`,
+    `chmod 600 ~/ak.env.new && mv ~/ak.env.new ~/ak.env`,
+    `mkdir -p ~/.claude && touch ~/.claude/CLAUDE.md && sed -i '/${EMAIL_NOTE}/d' ~/.claude/CLAUDE.md`,
+    ...(note ? [`printf '\n%s\n' ${shq(note)} >> ~/.claude/CLAUDE.md`] : []),
+    `sprite-env services restart ak`,
+  ].join(" && "), { timeoutMs: 120e3 });
+}
+/** Stop sending email: off the Sprite now. Its key is deleted the next time a full key is pasted (or by the user on resend.com). */
+async function removeEmail(inst) {
+  await emailOnSprite(inst, null);
+  const cur = load().find((x) => x.id === inst.id) ?? inst;
+  upsert({ ...cur, mail: null, mailOldKey: cur.mail?.keyId ?? cur.mailOldKey ?? null });
 }
 /** Add or remove a teammate on the Sprite's bar allow-list (the server rereads it within 10 s). */
 async function teamOnSprite(inst, email, add) {
@@ -606,7 +662,7 @@ async function dispatch(req, res, u, s, b) {
       (updating ?? Promise.resolve()).then(tick); // after any pass already running (it may have used the old version)
       return send(res, 202, "updating", "text/plain");
     }
-    const m = u.pathname.match(/^\/cloud\/instances\/([\w-]+)\/(restart|update|autoupdate|delete|tag|pages|domain|domain-remove|invite|uninvite|mcp)$/);
+    const m = u.pathname.match(/^\/cloud\/instances\/([\w-]+)\/(restart|update|autoupdate|delete|tag|pages|domain|domain-remove|invite|uninvite|mcp|email|email-remove)$/);
     if (req.method === "POST" && m) {
       const inst = s && load().find((i) => i.id === m[1] && i.email === s.email);
       if (!inst) return send(res, 404, { error: "No such instance" });
@@ -644,8 +700,9 @@ async function dispatch(req, res, u, s, b) {
         if (!c || inst.pages?.state !== "live") return send(res, 400, { error: "Host the site on Cloudflare Pages first" });
         const token = open(c.token);
         if (m[2] === "domain-remove") {
+          if (inst.mail) await removeEmail(inst); // the sender has to be on the site's domain
           if (inst.customDomain) await removePagesDomain(token, c.accountId, inst.pages.project, inst.customDomain.host);
-          upsert({ ...inst, customDomain: null });
+          upsert({ ...load().find((x) => x.id === inst.id), customDomain: null });
           await syncDomain(inst.id, c);
           return send(res, 200, { ok: true });
         }
@@ -655,6 +712,19 @@ async function dispatch(req, res, u, s, b) {
         upsert({ ...inst, customDomain: { host, status: "pending" } });
         await syncDomain(inst.id, c, `https://${host}`);
         await checkDomain(inst.id, c);
+        return send(res, 200, { ok: true });
+      }
+      if (m[2] === "email") {
+        const key = String(b?.key ?? "").trim();
+        if (inst.customDomain?.status !== "active" || !cfs.get(s.email)) return send(res, 400, { error: "Connect your own domain first" });
+        if (!/^re_[\w-]{10,}$/.test(key)) return send(res, 400, { error: "Paste a Resend API key (it starts with re_)" });
+        if (inst.mail?.status === "setting up") return send(res, 409, { error: "Already setting up" });
+        upsert({ ...inst, mail: { ...inst.mail, status: "setting up", detail: "starting", error: null } });
+        setupEmail(inst.id, key);
+        return send(res, 200, { ok: true });
+      }
+      if (m[2] === "email-remove") {
+        await removeEmail(inst);
         return send(res, 200, { ok: true });
       }
       if (m[2] === "pages") {

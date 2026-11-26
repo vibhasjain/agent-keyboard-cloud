@@ -263,6 +263,10 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
       return `${d.host}: at the DNS provider add CNAME ${d.host} → ${i.pages.sub}. ${d.now === i.pages.sub ? "✓ Found it; waiting for Cloudflare." : `✗ Not there yet${d.now ? ` (points to ${d.now})` : ""}.`}`;
     }
     const sites = async () => (await call("GET", "/cloud/instances")).instances;
+    const mailText = (i) => !i.mail ? (i.customDomain?.status === "active" ? "off (setup_email)" : "off (needs its own domain)")
+      : i.mail.status === "active" ? `sending from ${i.mail.from}`
+      : i.mail.status === "verifying" ? `Resend is verifying ${i.mail.domain}${i.mail.records ? `; the user adds these DNS records: ${i.mail.records.map((r) => `${r.type} ${r.name} ${r.priority ?? ""} ${r.content}`.replace(/  +/g, " ")).join("; ")}` : " (records are in Cloudflare; usually minutes)"}`
+      : i.mail.status === "error" ? `failed: ${i.mail.error} (setup_email to try again)` : `setting up: ${i.mail.detail}`;
     const find = async (id) => (await sites()).find((i) => i.id === id) ?? Promise.reject(new Error(`No site ${id}. Call list_sites.`));
 
     const server = new McpServer({ name: "agent-keyboard", version: "1.0.0" }, {
@@ -303,7 +307,7 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
         site: i.id, name: i.siteId, status: i.status, repo: i.repo,
         url: i.customDomain?.status === "active" ? `https://${i.customDomain.host}` : i.pages?.staging ?? i.pages?.live ?? i.url,
         staged: !!i.staging, hosting: i.pages?.state === "live" ? "Cloudflare Pages" : i.pages?.state ? `Cloudflare Pages: ${i.pages.state}${i.pages.error ? ` (${i.pages.error})` : ""}` : "not on Pages",
-        domain: i.pages?.state === "live" ? domainText(i) : undefined, teammates: i.team ?? [], auto_update: i.autoUpdate !== false, agent: { talk: !!i.mcp?.talk, manage: !!i.mcp?.manage }, open_signed_in: open(i.id), created: i.createdAt?.slice(0, 10), via: i.via ?? "web",
+        domain: i.pages?.state === "live" ? domainText(i) : undefined, teammates: i.team ?? [], auto_update: i.autoUpdate !== false, email: mailText(i), agent: { talk: !!i.mcp?.talk, manage: !!i.mcp?.manage }, open_signed_in: open(i.id), created: i.createdAt?.slice(0, 10), via: i.via ?? "web",
       }))));
     server.registerTool("site_action", {
       description: "restart or update a site's Sprite, (re)host it on Cloudflare Pages (pages), commit the bar's script tag to its index.html (tag), or delete it (removes the Sprite and its Claude connector from the user's Fly account; the repo stays).",
@@ -324,6 +328,19 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
       if (talk !== !!i.mcp?.talk || manage !== !!i.mcp?.manage) await call("POST", `/cloud/instances/${i.id}/mcp`, { talk, manage });
       const n = await find(id);
       return text({ site: n.id, auto_update: n.autoUpdate !== false, agent: { talk: !!n.mcp?.talk, manage: !!n.mcp?.manage } });
+    });
+    server.registerTool("setup_email", { description: "Let a site send email from its own domain (via the user's Resend account): the bar emails @mentioned teammates, and the site's agent can send email for the site. Needs an active custom domain. Returns where the user pastes their Resend key (never in this chat), or the current state.", inputSchema: { site }, annotations: { readOnlyHint: true } }, async ({ site: id }) => {
+      const i = await find(id);
+      if (i.customDomain?.status !== "active") return text(`${i.id} needs its own domain first (add_domain), since email is sent from it.`);
+      if (i.mail && i.mail.status !== "error") return text(mailText(i));
+      return text(`${i.mail?.error ? `The last try failed: ${i.mail.error}\n` : ""}Ask the user to open ${BASE}/dashboard, find ${i.customDomain.host} and paste a Resend API key under "Send email from …": sign up free at resend.com, then create a Full access key at resend.com/api-keys. They paste it there, never in this chat. We use it once to add the domain and its DNS records, then keep only a key that can send from that domain. Then call email_status.`);
+    });
+    server.registerTool("email_status", { description: "Whether a site sends email from its own domain, and what's left to do.", inputSchema: { site }, annotations: { readOnlyHint: true } }, async ({ site: id }) => text(mailText(await find(id))));
+    server.registerTool("remove_email", { description: "Stop a site sending email from its own domain (takes the key off its Sprite; DNS records stay).", inputSchema: { site }, annotations: { destructiveHint: true } }, async ({ site: id }) => {
+      const i = await find(id);
+      if (!i.mail) return text(`${i.id} isn't sending email.`);
+      await call("POST", `/cloud/instances/${i.id}/email-remove`, {});
+      return text(`Email is off for ${i.id}. Tell the user to delete the "Agent Keyboard (${i.siteId})" key at resend.com/api-keys, or it's deleted the next time they set up email.`);
     });
     server.registerTool("add_domain", { description: "Serve a site (hosted on Cloudflare Pages) at the user's own domain. Returns what's left to do, if anything.", inputSchema: { site, host: z.string().describe("e.g. www.example.com") } }, async ({ site: id, host }) => {
       await call("POST", `/cloud/instances/${id}/domain`, { host });
