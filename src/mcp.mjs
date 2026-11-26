@@ -12,7 +12,8 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 
 // A site agent (spec #16) gets the relay tools; the manage tools only when allowed; never the setup tools.
-const SITE_TOOLS = ["whoami", "list_sites", "read_conversation", "send_message", "get_reply", "domain_status"];
+const SITE_TOOLS = ["whoami", "list_sites", "domain_status"]; // with either switch
+const TALK_TOOLS = ["read_conversation", "send_message", "get_reply"];
 const MANAGE_TOOLS = ["site_action", "add_domain", "remove_domain", "invite_teammate", "remove_teammate"];
 const ACCESS_TTL = 3600e3, REFRESH_TTL = 90 * 864e5, CODE_TTL = 5 * 60e3;
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
@@ -31,7 +32,7 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
   let db = null;
   try { if (existsSync(FILE)) db = JSON.parse(open(readFileSync(FILE, "utf8"))); } catch {}
   db ??= { clients: {}, access: {}, refresh: {} };
-  db.sites ??= {}; // sha(token) → { login, email, from, manage }: a site agent's grant (spec #16), until switched off
+  db.sites ??= {}; // sha(token) → { login, email, from, talk, manage }: a site agent's grant (spec #16), until switched off
   const save = () => writeFileSync(FILE, seal(JSON.stringify(db)), { mode: 0o600 });
   const barTokens = new Map(); // email → { token, exp }: a Supabase session minted like /cloud/open's handoff
   const codes = new Map(); // code → { client, redirect_uri, challenge, login, email, exp }
@@ -131,7 +132,7 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
       if (!g || g.exp < Date.now() || (g.from && !load().some((i) => i.id === g.from && i.email === g.email))) return (json(res, 401, { error: "invalid_token" }, { "WWW-Authenticate": `Bearer resource_metadata="${BASE}/.well-known/oauth-protected-resource"` }), true);
       await fresh(g.login);
       for (const [k, v] of Object.entries(CORS)) res.setHeader(k, v);
-      const server = tools({ login: g.login, email: g.email }, req, g.from ? { from: g.from, manage: !!g.manage } : null);
+      const server = tools({ login: g.login, email: g.email }, req, g.from ? { from: g.from, talk: g.talk !== false, manage: !!g.manage } : null);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       res.on("close", () => { transport.close(); server.close(); });
       await server.connect(transport);
@@ -141,10 +142,10 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
     return false;
   }, {
     /** A grant for `inst`'s own agent (spec #16), replacing any earlier one. Returns the token. */
-    grant(inst, manage) {
+    grant(inst, talk, manage) {
       this.revoke(inst.id);
       const token = randomBytes(32).toString("base64url");
-      db.sites[sha(token)] = { login: inst.login, email: inst.email, from: inst.id, manage: !!manage };
+      db.sites[sha(token)] = { login: inst.login, email: inst.email, from: inst.id, talk: !!talk, manage: !!manage };
       save();
       return token;
     },
@@ -265,13 +266,13 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
     const find = async (id) => (await sites()).find((i) => i.id === id) ?? Promise.reject(new Error(`No site ${id}. Call list_sites.`));
 
     const server = new McpServer({ name: "agent-keyboard", version: "1.0.0" }, {
-      instructions: agent ? `These tools reach the user's other Agent Keyboard sites. You are the agent of site ${agent.from}. read_conversation shows another site's recent conversation; send_message asks that site's own agent for a change (it edits and ships that site's repo); list_sites lists them all.${agent.manage ? " You may also restart, update or delete sites, manage their domains and teammates: confirm anything destructive with the user first." : ""}` : `Agent Keyboard puts a prompt bar on a website; a Claude Code session behind it edits the site's repo and ships. These tools set it up and manage it for the signed-in user, the same as ${BASE}/start and ${BASE}/dashboard. To change a site itself, use send_message: it goes to that site's own agent, like typing in its bar (get_reply waits for longer edits; read_conversation shows the history). Setup order: connect_cloudflare, list_repos, start_setup, then setup_status until done (it says what the user does at each step). Never ask the user to paste a token, password or code into the chat: those go on ${BASE}/start.`,
+      instructions: agent ? `These tools reach the user's Agent Keyboard sites. You are the agent of site ${agent.from}. list_sites lists them all.${agent.talk ? " read_conversation shows another site's recent conversation; send_message asks that site's own agent for a change (it edits and ships that site's repo)." : ""}${agent.manage ? " You may restart, update or delete sites (this one included: restarting or updating it ends your turn), manage their domains and teammates: confirm anything destructive with the user first." : ""}` : `Agent Keyboard puts a prompt bar on a website; a Claude Code session behind it edits the site's repo and ships. These tools set it up and manage it for the signed-in user, the same as ${BASE}/start and ${BASE}/dashboard. To change a site itself, use send_message: it goes to that site's own agent, like typing in its bar (get_reply waits for longer edits; read_conversation shows the history). Setup order: connect_cloudflare, list_repos, start_setup, then setup_status until done (it says what the user does at each step). Never ask the user to paste a token, password or code into the chat: those go on ${BASE}/start.`,
     });
 
     if (agent) {
       const reg = server.registerTool.bind(server);
       server.registerTool = (name, def, fn) => {
-        if (!SITE_TOOLS.includes(name) && !(agent.manage && MANAGE_TOOLS.includes(name))) return;
+        if (!SITE_TOOLS.includes(name) && !(agent.talk && TALK_TOOLS.includes(name)) && !(agent.manage && MANAGE_TOOLS.includes(name))) return;
         return reg(name, def, (args, extra) => (console.log("mcp", agent.from, name, args?.site ?? ""), fn(args, extra)));
       };
     }
