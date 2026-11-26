@@ -15,7 +15,7 @@ import { appReady, authorizeUrl, createdFromManifest, installationPage, installU
 import { mcp } from "./mcp.mjs";
 import { addTag, getRepo, putSecret, putVariable, writeFile } from "./github.mjs";
 import { TOKEN_URL, WORKFLOW, addPagesDomain, cnameOf, ensureProject, findZone, isApex, pagesDomain, pagesMemory, pointDns, removePagesDomain, verify, accountLabel } from "./cloudflare.mjs";
-import { ensureSprite, provision, slug, spriteName } from "./provision.mjs";
+import { provision, slug, spriteName } from "./provision.mjs";
 
 const env = process.env;
 const DATA = env.DATA_DIR ?? "./data";
@@ -115,12 +115,22 @@ function step(flow, s, extra = {}) {
   Object.assign(flow, { step: s, detail: "", error: null }, extra);
 }
 
+// Fly and Claude are connected once per account, like Cloudflare (accounts.json), and shared by every site:
+// one Claude connector for all the user's ak-* Sprites. Users from before keep their newest site's.
+const ACCT = `${DATA}/accounts.json`;
+let accts;
+try { accts = new Map(Object.entries(existsSync(ACCT) ? JSON.parse(open(readFileSync(ACCT, "utf8"))) : {})); } catch { accts = new Map(); }
+const setAcct = (email, v) => { accts.set(email, { ...accts.get(email), ...v }); writeFileSync(ACCT, seal(JSON.stringify(Object.fromEntries(accts))), { mode: 0o600 }); notify(email); };
+const newest = (email) => load().filter((i) => i.email === email).sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""))[0];
+const flyOf = (email) => accts.get(email)?.assertion ?? (newest(email) && open(newest(email).assertion));
+const claudeOf = (email) => accts.get(email)?.claude ?? newest(email)?.connection;
+const LOGIN = "ak-claude-signin"; // a short-lived Sprite the Claude sign-in runs on, deleted after
+
+// The start flow: Fly (once), Claude (once), then the site if one was picked; with none it ends at "ready".
 async function runFly(flow) {
   try {
-    // Another instance's Fly access still works: reuse it and skip the code.
-    const prev = load().find((i) => i.email === flow.email);
-    const prevAssertion = prev && open(prev.assertion);
-    let creds = prev ? await mint(prevAssertion).catch(() => null) : null;
+    const known = flyOf(flow.email);
+    let creds = known ? await mint(known).catch(() => null) : null;
     const reg = creds ? null : await register(flow.email);
     if (reg) step(flow, "fly", { userCode: reg.claim.user_code, verifyUrl: reg.claim.verification_uri_complete ?? reg.claim.verification_uri });
     const until = Date.now() + (reg?.claim.expires_in ?? 600) * 1000;
@@ -129,48 +139,60 @@ async function runFly(flow) {
       await new Promise((r) => setTimeout(r, Math.max(5, reg.claim.interval ?? 5) * 1000));
       creds = await pollClaim(reg.claim_token);
     }
-    flow.assertion = creds.identity_assertion ?? prevAssertion;
-    step(flow, "sprite", { detail: `creating ${flow.sprite}` });
-    const api = sprites(creds);
-    flow.url = await ensureSprite(api, flow.sprite);
-    step(flow, "sprite", { detail: "starting Claude sign-in" });
-    flow.loginUrl = await claudeLoginStart(api, flow.sprite);
-    step(flow, "claude");
+    flow.assertion = creds.identity_assertion ?? known;
+    if (flow.assertion !== accts.get(flow.email)?.assertion) setAcct(flow.email, { assertion: flow.assertion });
+    const api = sprites(creds), conn = claudeOf(flow.email);
+    if (conn && (await api.connections()).some((c) => c.id === conn)) {
+      if (conn !== accts.get(flow.email)?.claude) setAcct(flow.email, { claude: conn });
+      return await runSite(flow);
+    }
+    step(flow, "claude", { detail: "starting Claude sign-in" });
+    if (!(await api.get(LOGIN).catch((e) => (e.status === 404 ? null : Promise.reject(e))))) await api.create(LOGIN);
+    flow.loginUrl = await claudeLoginStart(api, LOGIN);
+    step(flow, "claude"); // the code the user pastes continues in runClaude
   } catch (e) {
     step(flow, "error", { error: e.message });
   }
 }
 
-async function runProvision(flow, code) {
+async function runClaude(flow, code) {
   try {
     step(flow, "connector", { detail: "signing in to Claude" });
-    const creds = await mint(flow.assertion);
-    const connection = await claudeLoginFinish(sprites(creds), flow.sprite, code, creds);
+    const creds = await mint(flow.assertion), api = sprites(creds);
+    const connection = await claudeLoginFinish(api, LOGIN, code, creds);
+    await api.setPolicy(connection, "ak-"); // every one of the user's Sprites
+    setAcct(flow.email, { claude: connection });
     flow.loginUrl = null;
-    step(flow, "install");
-    const user = ghUser(flow.login);
-    if (!user) throw new Error("Your GitHub sign-in expired. Sign in again.");
-    const r = await provision(
-      { assertion: flow.assertion, email: flow.email, repo: flow.repo, domain: flow.domain, name: flow.name, ref: REF, githubToken: user.token, supabase, connector: connection },
-      (d) => (flow.detail = d),
-    );
-    // A brought site gets the tag committed to its index.html; if there isn't one, the page shows it to paste.
-    const tagPath = r.starter || r.staging ? r.tagPath : await addTag(user.token, r.repo, r.tag).catch(() => null);
-    upsert({ id: r.sprite, tagPath, email: flow.email, login: flow.login, siteId: r.siteId, repo: r.repo, domain: r.domain, url: r.url, connection: r.connection, starter: r.starter, staging: r.staging, tag: r.tag, via: flow.via, ref: REF, createdAt: new Date().toISOString(), assertion: seal(flow.assertion) });
-    flow.assertion = null;
-    // Every site is hosted on Cloudflare Pages (connected before the flow starts).
-    flow.detail = "hosting your site on Cloudflare Pages";
-    await setupPages(r.sprite, user.token, cfs.get(flow.email));
-    const pages = load().find((i) => i.id === r.sprite)?.pages ?? {};
-    step(flow, "done", { result: { url: pages.staging ?? pages.live ?? r.url, pagesError: pages.state === "error" ? pages.error : null, tag: r.tag, starter: r.starter, staging: r.staging, repo: r.repo, tagPath } });
+    api.remove(LOGIN).catch((e) => console.error("remove", LOGIN, e.message));
+    await runSite(flow);
   } catch (e) {
     // Claude's login is single-use: drop the old link (the page waits) and start a fresh one.
     if (flow.step === "connector") flow.loginUrl = null;
     step(flow, flow.step === "connector" ? "claude" : "error", { error: e.message });
     if (flow.step === "claude") {
-      mint(flow.assertion).then((c) => claudeLoginStart(sprites(c), flow.sprite)).then((u) => (flow.loginUrl = u), (e2) => step(flow, "error", { error: e2.message }));
+      mint(flow.assertion).then((c) => claudeLoginStart(sprites(c), LOGIN)).then((u) => (flow.loginUrl = u), (e2) => step(flow, "error", { error: e2.message }));
     }
   }
+}
+
+async function runSite(flow) {
+  if (!flow.sprite) return step(flow, "ready");
+  step(flow, "install");
+  const user = ghUser(flow.login);
+  if (!user) throw new Error("Your GitHub sign-in expired. Sign in again.");
+  const r = await provision(
+    { assertion: flow.assertion, email: flow.email, repo: flow.repo, domain: flow.domain, name: flow.name, ref: REF, githubToken: user.token, supabase, connector: claudeOf(flow.email) },
+    (d) => (flow.detail = d),
+  );
+  // A brought site gets the tag committed to its index.html; if there isn't one, the page shows it to paste.
+  const tagPath = r.starter || r.staging ? r.tagPath : await addTag(user.token, r.repo, r.tag).catch(() => null);
+  upsert({ id: r.sprite, tagPath, email: flow.email, login: flow.login, siteId: r.siteId, repo: r.repo, domain: r.domain, url: r.url, connection: r.connection, starter: r.starter, staging: r.staging, tag: r.tag, via: flow.via, ref: REF, createdAt: new Date().toISOString(), assertion: seal(flow.assertion) });
+  flow.assertion = null;
+  // Every site is hosted on Cloudflare Pages (connected before the flow starts).
+  flow.detail = "hosting your site on Cloudflare Pages";
+  await setupPages(r.sprite, user.token, cfs.get(flow.email));
+  const pages = load().find((i) => i.id === r.sprite)?.pages ?? {};
+  step(flow, "done", { result: { url: pages.staging ?? pages.live ?? r.url, pagesError: pages.state === "error" ? pages.error : null, tag: r.tag, starter: r.starter, staging: r.staging, repo: r.repo, tagPath } });
 }
 
 const flowView = (f) => f && { step: f.step, detail: f.detail, error: f.error, userCode: f.userCode, verifyUrl: f.verifyUrl, loginUrl: f.loginUrl, result: f.result, sprite: f.sprite };
@@ -302,7 +324,9 @@ async function act(inst, action) {
     upsert({ ...(load().find((i) => i.id === inst.id) ?? inst), ref: REF, version });
   } else if (action === "delete") {
     await api.remove(inst.id).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
-    for (const c of [inst.connection, inst.mcp?.connection].filter(Boolean)) await api.removeConnection(c).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
+    // The Claude connector is shared by the user's sites: it stays while the account or another site uses it.
+    const shared = (c) => c === inst.connection && (c === accts.get(inst.email)?.claude || load().some((o) => o.id !== inst.id && o.connection === c));
+    for (const c of [inst.connection, inst.mcp?.connection].filter((c) => c && !shared(c))) await api.removeConnection(c).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
     mcpServer.revoke(inst.id);
     save(load().filter((i) => i.id !== inst.id));
   }
@@ -482,7 +506,7 @@ const routes = {
   "GET /cloud/me": (q, req, res, s) => {
     if (!s) return send(res, 200, { signedIn: false, app: appReady() });
     const inst = load().find((i) => i.email === s.email);
-    send(res, 200, { signedIn: true, login: s.login, email: s.email, github: !!ghUser(s.login), installUrl: appReady() ? installUrl("start") : null, instance: inst && pub(inst), cloudflare: accountLabel(cfs.get(s.email)?.accountName), cloudflareTokenUrl: TOKEN_URL, claude: mcpServer.claude(s.login), events: eventsUrl(s.email), flow: flowView(flows.get(s.email)) });
+    send(res, 200, { signedIn: true, login: s.login, email: s.email, github: !!ghUser(s.login), installUrl: appReady() ? installUrl("start") : null, instance: inst && pub(inst), cloudflare: accountLabel(cfs.get(s.email)?.accountName), fly: !!flyOf(s.email), claudeSignIn: !!claudeOf(s.email), cloudflareTokenUrl: TOKEN_URL, claude: mcpServer.claude(s.login), events: eventsUrl(s.email), flow: flowView(flows.get(s.email)) });
   },
   "GET /cloud/repos": async (q, req, res, s) => {
     const u = s && ghUser(s.login);
@@ -494,9 +518,16 @@ const routes = {
     if (!u) return send(res, 401, { error: "Sign in with GitHub again" });
     if (!cfs.get(s.email)) return send(res, 400, { error: "Connect Cloudflare first" });
     const f = flows.get(s.email);
-    if (f && !["error", "done"].includes(f.step)) return send(res, 200, flowView(f));
+    if (f && !["error", "done", "ready"].includes(f.step)) return send(res, 200, flowView(f));
     if (limited(req.headers["x-nf-client-connection-ip"] ?? req.headers["fly-client-ip"] ?? req.socket.remoteAddress)) return send(res, 429, { error: "Too many attempts. Try again in an hour." });
     let repo = null, domain = null, name = null;
+    if (b.account === true) {
+      const flow = { email: s.email, login: s.login }; // Fly and Claude only; the site is picked after
+      step(flow, "fly", { detail: "registering with Fly" });
+      flows.set(s.email, flow);
+      runFly(flow);
+      return send(res, 200, flowView(flow));
+    }
     if (b.repo) {
       if (!(await userRepos(u.token, u.installations)).some((r) => r.full_name === b.repo)) return send(res, 400, { error: "Pick a repo you gave Agent Keyboard access to" });
       repo = b.repo;
@@ -506,7 +537,7 @@ const routes = {
       name = slug(String(b.name ?? "my-site"));
     }
     const flow = { email: s.email, login: s.login, repo, domain, name, via: b.via === "mcp" ? "mcp" : undefined, sprite: spriteName(slug(repo ? repo.split("/")[1] : name)) };
-    if (load().some((i) => i.id === flow.sprite)) return send(res, 409, { error: `You already have ${flow.sprite}. Manage it from the dashboard, or pick another repo or name.` });
+    if (flow.sprite === LOGIN || load().some((i) => i.id === flow.sprite)) return send(res, 409, { error: `You already have ${flow.sprite}. Manage it from the dashboard, or pick another repo or name.` });
     step(flow, "fly", { detail: "registering with Fly" });
     flows.set(s.email, flow);
     runFly(flow);
@@ -517,7 +548,7 @@ const routes = {
     const f = s && flows.get(s.email);
     if (!f || f.step !== "claude") return send(res, 409, { error: "No Claude sign-in is waiting" });
     if (!/^[\w#.~-]{10,400}$/.test(String(b.code ?? "").trim())) return send(res, 400, { error: "Paste the code Claude showed you" });
-    runProvision(f, String(b.code).trim());
+    runClaude(f, String(b.code).trim());
     step(f, "connector", { detail: "signing in to Claude" });
     send(res, 200, flowView(f));
   },

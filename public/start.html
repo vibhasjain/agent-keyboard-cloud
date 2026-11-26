@@ -25,8 +25,9 @@ const api = async (path, body) => {
   if (!r.ok) throw new Error(d.error || "Something went wrong (" + r.status + ")");
   return d;
 };
-const STEPS = [["cloudflare", "Connect Cloudflare"], ["site", "Pick your site"], ["fly", "Connect Fly.io"], ["claude", "Sign in to Claude"], ["install", "Install Agent Keyboard"], ["done", "Done"]];
-const order = { cloudflare: 0, site: 1, fly: 2, sprite: 2, claude: 3, connector: 4, install: 4, done: 5 };
+// Cloudflare, Fly and Claude are connected once for all your sites; each new site is just pick + install.
+const STEPS = [["cloudflare", "Connect Cloudflare"], ["fly", "Connect Fly.io"], ["claude", "Sign in to Claude"], ["site", "Pick your site"], ["install", "Install Agent Keyboard"], ["done", "Done"]];
+const order = { cloudflare: 0, fly: 1, claude: 2, connector: 2, site: 3, ready: 3, install: 4, done: 5 };
 const steps = (s) => `<ol class="steps">${STEPS.map(([k, t], i) => `<li class="${i < order[s] || s === "done" ? "ok" : i === order[s] ? "now" : ""}">${t}</li>`).join("")}</ol>`;
 let timer, lastStep, copied = "";
 
@@ -47,8 +48,9 @@ async function render() {
     return;
   }
   const f = me.flow;
-  const idle = !f || ["error", "done"].includes(f.step) && lastStep === undefined;
+  const idle = !f || ["error", "done", "ready"].includes(f.step) && lastStep === undefined;
   if (idle && !me.cloudflare) return cloudflare(me);
+  if (idle && !(me.fly && me.claudeSignIn)) return account();
   if (idle) return pick(me, f?.step === "error" ? f.error : null);
   show(f);
 }
@@ -68,10 +70,16 @@ function cloudflare(me) {
   };
 }
 
+// Steps 2 and 3 (once): Fly.io, then Claude. The flow shows the Fly code and the Claude sign-in, then ends at "ready".
+async function account() {
+  try { lastStep = null; show(await api("start", { account: true })); }
+  catch (err) { $app.innerHTML = `<p class="err">${esc(err.message)}</p>${steps("fly")}`; }
+}
+
 async function pick(me, error) {
   let repos = [];
   try { repos = (await api("repos")).repos; } catch (e) { error = e.message; }
-  $app.innerHTML = `<p><b>2. Pick your site.</b> Cloudflare connected (${esc(me.cloudflare)}).</p>
+  $app.innerHTML = `<p><b>4. Pick your site.</b> Cloudflare connected (${esc(me.cloudflare)}) · Fly.io connected · Claude connected.</p>
     ${error ? `<p class="err">${esc(error)}</p>` : ""}
     <form id="f">
       <label for="repo">Your site's repo</label>
@@ -98,6 +106,7 @@ async function pick(me, error) {
 }
 
 function show(f) {
+  if (f.step === "ready") { lastStep = undefined; return render(); }
   lastStep = f.step;
   if (f.step === "error") {
     $app.innerHTML = `<p class="err">${esc(f.error)}</p><button class="btn" id="again">Start again</button>`;
@@ -105,7 +114,7 @@ function show(f) {
     return;
   }
   if (f.step === "fly" && f.userCode) {
-    $app.innerHTML = `<p><b>3. Connect Fly.io.</b> The button copies this code and opens Fly: sign in there, then paste it when Fly asks. If you don't have a Fly account yet, you'll make one there. This page continues by itself.</p>
+    $app.innerHTML = `<p><b>2. Connect Fly.io.</b> Your sites run on Sprites in your own Fly account. The button copies this code and opens Fly: sign in there, then paste it when Fly asks. If you don't have a Fly account yet, you'll make one there. This page continues by itself.</p>
       <div class="code">${esc(f.userCode)}</div><div class="row"><a class="btn" id="open" href="${esc(f.verifyUrl)}" target="_blank" rel="noopener">Copy code &amp; open Fly.io</a></div><p class="small" id="copied" role="status">${esc(copied)}</p>${steps(f.step)}`;
     document.getElementById("open").onclick = () =>
       navigator.clipboard.writeText(f.userCode).then(
@@ -113,10 +122,10 @@ function show(f) {
         () => (document.getElementById("copied").textContent = copied = `Couldn't copy automatically. Type ${f.userCode} on Fly when it asks for the code.`),
       );
   } else if (f.step === "claude") {
-    $app.innerHTML = `<p><b>4. Sign in to Claude.</b> Approve on claude.ai, then paste the code it shows you here. The token goes into a connector in your own Fly account.</p>
+    $app.innerHTML = `<p><b>3. Sign in to Claude.</b> Approve on claude.ai, then paste the code it shows you here. The token goes into a connector in your own Fly account, shared by all your sites.</p>
       ${f.error ? `<p class="err">${esc(f.error)}</p>` : ""}
       ${f.loginUrl ? `<a class="btn" href="${esc(f.loginUrl)}" target="_blank" rel="noopener">Sign in to Claude</a>
-      <form id="c"><label for="code">Code from Claude</label><input id="code" type="password" autocomplete="off" spellcheck="false" required><div class="row"><button class="btn">Continue</button></div></form>` : `<p>Getting a fresh sign-in link…</p>`}
+      <form id="c"><label for="code">Code from Claude</label><input id="code" type="password" autocomplete="off" spellcheck="false" required><div class="row"><button class="btn">Continue</button></div></form>` : `<p>Getting a sign-in link…</p>`}
       ${steps(f.step)}`;
     const form = document.getElementById("c");
     if (form) {
