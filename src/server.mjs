@@ -270,6 +270,7 @@ async function setupPages(id, ghToken, c) {
     const { out } = await api.exec(id, `. ~/ak.env; printf '%s\\n%s' "$SITES" "$EXTRA_ORIGINS"`, { timeoutMs: 60e3 });
     const [sitesJson, had = ""] = out.trim().split("\n");
     const sites = JSON.parse(sitesJson);
+    sites[0].branch = live; // the bar commits to the live branch (older sites were staged on ak-staging)
     sites[0].sandbox = { preview: `https://{branch}.${p.subdomain}` };
     const extra = [...new Set([...had.split(",").filter(Boolean), `https://${p.subdomain}`])].join(",");
     const lines = `SITES=${shq(JSON.stringify(sites))}\nEXTRA_ORIGINS=${shq(extra)}\nCLOUDFLARE_API_TOKEN=${shq(token)}\nCLOUDFLARE_ACCOUNT_ID=${shq(c.accountId)}\n`;
