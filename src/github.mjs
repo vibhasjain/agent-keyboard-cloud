@@ -74,10 +74,17 @@ function mergeTag(tag, old) {
   return tag.replace(/><\/script>$/, `${extra}></script>`);
 }
 
+/** Where an old bar tag pointed: its server's base URL (the src minus /widget.js) and site id (null for a relative src). */
+function previousOf(old) {
+  const src = old.match(/\ssrc=["']?([^"'\s>]+)/)?.[1], siteId = old.match(/\sdata-site=["']?([^"'\s>]+)/)?.[1];
+  return /^https?:\/\//.test(src ?? "") && siteId ? { origin: src.replace(/\/widget\.js([?#].*)?$/, ""), siteId } : null;
+}
+
 /**
  * Put the bar's script tag on the site. Other Agent Keyboard bars (an older instance, or self-hosted)
  * are swapped for it on every .html page, keeping their data-* settings, so each page has one bar.
- * With none, it goes into the site's index.html before </body>. One commit. Returns the first path.
+ * With none, it goes into the site's index.html before </body>. One commit. Returns { path: the first
+ * page changed, previous: the replaced bar's { origin, siteId } or null }.
  */
 export async function addTag(token, fullName, tag, branch) {
   branch ??= (await getRepo(token, fullName)).default_branch;
@@ -89,16 +96,16 @@ export async function addTag(token, fullName, tag, branch) {
   const { tree } = await gh(token, "GET", `/repos/${fullName}/git/trees/${encodeURIComponent(branch)}?recursive=1`);
   const pages = tree.filter((t) => t.type === "blob" && /\.html?$/i.test(t.path) && !/(^|\/)node_modules\//.test(t.path)).slice(0, 300);
   const changes = {};
-  let current = null;
+  let current = null, previous = null;
   for (const { path } of pages) {
     const html = await read(path);
     if (!html) continue;
     if (html.includes(src)) current ??= path;
-    const next = html.replace(OLD_BAR, (old) => (old.includes(src) ? old : mergeTag(tag, old)));
+    const next = html.replace(OLD_BAR, (old) => (old.includes(src) ? old : ((previous ??= previousOf(old)), mergeTag(tag, old))));
     if (next !== html) changes[path] = next;
   }
   if (!Object.keys(changes).length) {
-    if (current) return current; // already there
+    if (current) return { path: current, previous: null }; // already there
     for (const path of ["index.html", "public/index.html", "site/index.html", "docs/index.html", "src/index.html"]) {
       const html = await read(path);
       const i = html?.toLowerCase().lastIndexOf("</body>") ?? -1;
@@ -115,7 +122,7 @@ export async function addTag(token, fullName, tag, branch) {
   });
   const c = await gh(token, "POST", `/repos/${fullName}/git/commits`, { message: "Add the Agent Keyboard bar", tree: t.sha, parents: [ref.object.sha] });
   await gh(token, "PATCH", `/repos/${fullName}/git/refs/heads/${branch}`, { sha: c.sha });
-  return paths[0];
+  return { path: paths[0], previous };
 }
 
 /** An Actions secret, sealed to the repo's public key (libsodium sealed box, as GitHub requires). */

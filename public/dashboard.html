@@ -23,7 +23,15 @@ const api = async (path, body) => {
   if (!r.ok) throw new Error(d.error || "Something went wrong (" + r.status + ")");
   return d;
 };
-const LABEL = { restart: "Restarting…", update: "Updating… (about a minute)", delete: "Deleting…", tag: "Adding…", pages: "Starting…", "domain-remove": "Removing…", "email-remove": "Removing…", email: "Starting…" };
+const LABEL = { restart: "Restarting…", update: "Updating… (about a minute)", delete: "Deleting…", tag: "Adding…", pages: "Starting…", "domain-remove": "Removing…", "email-remove": "Removing…", email: "Starting…", "import-skip": "Saving…" };
+// Spec 19: the site had an older bar. Offer to bring its notes and memory over (the old instance asks its owner to sign in once).
+const moved = (i) => {
+  const p = i.previous, m = i.migrate ?? {}, host = p && new URL(p.origin).host;
+  if (!p || m.state === "skipped") return "";
+  if (m.state === "running") return `<div class="meta">Bringing notes and memory over from ${esc(host)}…</div>`;
+  if (m.state === "done") return `<div class="meta">${esc(m.report)}</div>`;
+  return `<div class="meta">This site already had Agent Keyboard at <b>${esc(host)}</b>. Bring its notes and memory over?</div>${m.state === "error" ? `<p class="err">${esc(m.error)}</p>` : ""}<div class="row"><a class="btn ghost" href="/cloud/import/${esc(i.id)}" target="_blank" rel="opener">Bring them over</a><button class="btn ghost" data-a="import-skip">Start fresh</button></div>`;
+};
 let timer;
 
 // Teammates: people who can sign in to this site's bar. Inviting returns a single-use join link to send them.
@@ -147,6 +155,7 @@ async function render(note) {
       <div class="meta upd"><span>${behind === null ? "" : behind ? `Agent Keyboard update available · <button class="link" data-a="update">Update now</button>` : "Agent Keyboard is up to date"}</span><label class="auto" title="Installs each new Agent Keyboard release when no job is running">Auto-update<button class="switch" role="switch" aria-checked="${i.autoUpdate !== false}" data-a="autoupdate" aria-label="Auto-update"></button></label></div>
       ${i.staging ? `<div class="meta">Staged: the bar commits to <b>ak-staging</b> (this preview); tell it "deploy to live" to ship</div>` : ""}
       ${i.starter ? "" : i.tagPath ? "" : `<pre>${esc(i.tag)}</pre>`}
+      ${moved(i)}
       ${hosting(i, me)}
       ${i.status === "reconnect Fly" ? `<p class="err">Our access to your Fly account expired or was revoked. Delete and set up again to reconnect.</p>` : ""}
       <div class="row actions">${!me.cloudflare || i.pages?.state === "live" || i.pages?.state === "setting up" ? "" : `<button class="btn ghost" data-a="pages">${i.pages?.state === "error" ? "Retry Cloudflare Pages" : "Host on Cloudflare Pages"}</button>`}${i.starter || i.tagPath ? "" : `<button class="btn ghost" data-a="tag" title="Commits the tag to your repo's index.html">Add the tag for me</button>`}</div>
@@ -269,7 +278,7 @@ async function render(note) {
     (b.closest(".row")?.querySelectorAll("button") ?? [b]).forEach((x) => (x.disabled = true));
     b.classList.remove("round"); // the progress label replaces the icon
     b.textContent = LABEL[a];
-    try { const r = await api(`instances/${id}/${a}`, {}); render(a === "delete" ? `Deleted ${id}.` : a === "domain-remove" ? "Removed the domain." : a === "email-remove" ? "Email is off." : a === "email" ? "Setting up email…" : a === "tag" ? `Added the tag to ${r.path}. Your host redeploys from that commit.` : `${id}: ${a} done.`); }
+    try { const r = await api(`instances/${id}/${a}`, {}); render(a === "delete" ? `Deleted ${id}.` : a === "domain-remove" ? "Removed the domain." : a === "email-remove" ? "Email is off." : a === "email" ? "Setting up email…" : a === "tag" ? `Added the tag to ${r.path}. Your host redeploys from that commit.` : a === "import-skip" ? "Starting fresh." : `${id}: ${a} done.`); }
     catch (e) { if (e.message === "Sign in with GitHub again") location.href = "/cloud/github/login?next=dashboard"; else render(e.message); }
   }));
 }

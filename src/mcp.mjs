@@ -253,6 +253,7 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
           `Open it signed in to the bar: ${open(f.sprite)}`,
           r.staging ? `It's staged: the bar commits to the ak-staging branch (that preview). Tell the bar "deploy to live" to ship.` : null,
           !r.starter && !r.staging && !r.tagPath ? `We couldn't find an index.html for the bar. Add this tag before </body> on the site's pages:\n${r.tag}` : null,
+          r.previous ? `This site already had Agent Keyboard at ${r.previous.origin}. Ask the user whether to bring its notes, memory and settings over: they open ${BASE}/cloud/import/${f.sprite} and sign in to the old one once. Or start fresh: site_action { site: "${f.sprite}", action: "import-skip" }.` : null,
           `Manage it at ${BASE}/dashboard.`,
         ].filter(Boolean).join("\n");
       }
@@ -313,16 +314,16 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
         site: i.id, name: i.siteId, status: i.status, repo: i.repo,
         url: i.customDomain?.status === "active" ? `https://${i.customDomain.host}` : i.pages?.staging ?? i.pages?.live ?? i.url,
         staged: !!i.staging, hosting: i.pages?.state === "live" ? "Cloudflare Pages" : i.pages?.state ? `Cloudflare Pages: ${i.pages.state}${i.pages.error ? ` (${i.pages.error})` : ""}` : "not on Pages",
-        domain: i.pages?.state === "live" ? domainText(i) : undefined, teammates: i.team ?? [], auto_update: i.autoUpdate !== false, email: mailText(i), agent: { talk: !!i.mcp?.talk, manage: !!i.mcp?.manage }, open_signed_in: open(i.id), created: i.createdAt?.slice(0, 10), via: i.via ?? "web",
+        domain: i.pages?.state === "live" ? domainText(i) : undefined, teammates: i.team ?? [], auto_update: i.autoUpdate !== false, email: mailText(i), moved_from: i.previous ? { from: i.previous.origin, state: i.migrate?.state ?? `not asked yet (bring it over: ${BASE}/cloud/import/${i.id})`, report: i.migrate?.report ?? i.migrate?.error } : undefined, agent: { talk: !!i.mcp?.talk, manage: !!i.mcp?.manage }, open_signed_in: open(i.id), created: i.createdAt?.slice(0, 10), via: i.via ?? "web",
       }))));
     server.registerTool("site_action", {
-      description: "restart or update a site's Sprite, (re)host it on Cloudflare Pages (pages), commit the bar's script tag to its index.html (tag), or delete it (removes the Sprite and its Claude connector from the user's Fly account; the repo stays).",
-      inputSchema: { site, action: z.enum(["restart", "update", "pages", "tag", "delete"]), confirm: z.boolean().optional().describe("Required true for delete, after the user confirms.") },
+      description: "restart or update a site's Sprite, (re)host it on Cloudflare Pages (pages), commit the bar's script tag to its index.html (tag), start fresh instead of bringing an older bar's notes over (import-skip), or delete it (removes the Sprite and its Claude connector from the user's Fly account; the repo stays).",
+      inputSchema: { site, action: z.enum(["restart", "update", "pages", "tag", "import-skip", "delete"]), confirm: z.boolean().optional().describe("Required true for delete, after the user confirms.") },
       annotations: { destructiveHint: true },
     }, async ({ site: id, action, confirm }) => {
       if (action === "delete" && confirm !== true) return text(`Deleting ${id} removes its Sprite and Claude connector from the user's Fly account (the repo stays). Ask the user to confirm, then call again with confirm: true.`);
       const r = await call("POST", `/cloud/instances/${id}/${action}`, {});
-      return text(action === "tag" ? `Added the tag to ${r.path}.` : action === "pages" ? "Setting up Cloudflare Pages; check list_sites in a minute." : `${id}: ${action} done.`);
+      return text(action === "tag" ? `Added the tag to ${r.path}.` : action === "import-skip" ? "Starting fresh." : action === "pages" ? "Setting up Cloudflare Pages; check list_sites in a minute." : `${id}: ${action} done.`);
     });
     server.registerTool("site_settings", {
       description: "A site's Advanced settings, as on the dashboard: auto_update (update the Sprite with each Agent Keyboard release), agent_talk (its agent may read and message the user's other sites' agents) and agent_manage (its agent may manage the user's sites, this one too). Omitted fields stay as they are; list_sites shows the current values.",

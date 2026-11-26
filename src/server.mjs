@@ -233,14 +233,14 @@ async function runSite(flow) {
     (d) => (flow.detail = d),
   );
   // A brought site gets the tag committed to its index.html; if there isn't one, the page shows it to paste.
-  const tagPath = r.starter || r.staging ? r.tagPath : await addTag(user.token, r.repo, r.tag).catch(() => null);
-  upsert({ id: r.sprite, tagPath, email: flow.email, login: flow.login, siteId: r.siteId, repo: r.repo, domain: r.domain, url: r.url, connection: r.connection, starter: r.starter, staging: r.staging, tag: r.tag, via: flow.via, ref: REF, createdAt: new Date().toISOString(), assertion: seal(flow.assertion) });
+  const { path: tagPath, previous } = r.starter || r.staging ? { path: r.tagPath, previous: r.previous } : await addTag(user.token, r.repo, r.tag).catch(() => ({ path: null, previous: null }));
+  upsert({ id: r.sprite, tagPath, previous, email: flow.email, login: flow.login, siteId: r.siteId, repo: r.repo, domain: r.domain, url: r.url, connection: r.connection, starter: r.starter, staging: r.staging, tag: r.tag, via: flow.via, ref: REF, createdAt: new Date().toISOString(), assertion: seal(flow.assertion) });
   flow.assertion = null;
   // Every site is hosted on Cloudflare Pages (connected before the flow starts).
   flow.detail = "hosting your site on Cloudflare Pages";
   await setupPages(r.sprite, user.token, cfs.get(flow.email));
   const pages = load().find((i) => i.id === r.sprite)?.pages ?? {};
-  step(flow, "done", { result: { url: pages.staging ?? pages.live ?? r.url, pagesError: pages.state === "error" ? pages.error : null, tag: r.tag, starter: r.starter, staging: r.staging, repo: r.repo, tagPath } });
+  step(flow, "done", { result: { url: pages.staging ?? pages.live ?? r.url, pagesError: pages.state === "error" ? pages.error : null, tag: r.tag, starter: r.starter, staging: r.staging, repo: r.repo, tagPath, previous } });
 }
 
 const flowView = (f) => f && { step: f.step, detail: f.detail, error: f.error, userCode: f.userCode, verifyUrl: f.verifyUrl, loginUrl: f.loginUrl, result: f.result, sprite: f.sprite };
@@ -403,6 +403,60 @@ async function handoff(inst, email) {
   const token = d.hashed_token ?? d.properties?.hashed_token;
   return token ? `${site}/#ak_handoff=${encodeURIComponent(token)}` : site;
 }
+// ---- spec 19: bring an older bar's notes, memory, settings and skills over ----
+// The Sprite's own server pulls the bundle from the old instance (POST /sites/:id/import, internal secret, loopback).
+async function runImport(inst, auth) {
+  const cur = () => load().find((x) => x.id === inst.id) ?? inst;
+  if (cur().migrate?.state === "running") return { error: "Already bringing them over" };
+  upsert({ ...cur(), migrate: { state: "running" } });
+  try {
+    const api = sprites(await mint(open(inst.assertion)));
+    const payload = Buffer.from(JSON.stringify({ origin: inst.previous.origin, site: inst.previous.siteId, ...auth })).toString("base64");
+    const { out } = await api.exec(inst.id, `. ~/ak.env; printf %s ${shq(payload)} | base64 -d | curl -sS -X POST "http://127.0.0.1:$PORT/sites/${inst.siteId}/import" -H "x-ak-internal: $AK_INTERNAL_SECRET" -H 'Content-Type: application/json' --data-binary @- -w '\n%{http_code}'`, { timeoutMs: 600e3 });
+    const lines = out.trim().split("\n"), code = Number(lines.pop());
+    const r = JSON.parse(lines.join("\n") || "{}");
+    if (code !== 200) throw new Error(r.error ?? `import answered ${code}`);
+    const report = importReport(r, inst.previous.origin);
+    upsert({ ...cur(), migrate: { state: "done", result: r, report, at: new Date().toISOString() } });
+    return { ...r, report };
+  } catch (e) {
+    console.error("import", inst.id, e.message);
+    upsert({ ...cur(), migrate: { state: "error", error: e.message } });
+    return { error: e.message };
+  }
+}
+/** What came over, in a sentence (the popup, the dashboard and the MCP say the same). */
+function importReport(r, origin) {
+  const host = new URL(origin).host;
+  if (r.error) return r.error;
+  const what = r.notesOnly ? `${r.notes} notes (memory and settings need ${host} updated first)` : `${r.notes} notes, ${r.memories} memories, settings${r.skills?.length ? ` and ${r.skills.length} skills` : ""}`;
+  return `Brought over ${what} from ${host}.${r.envNames?.length ? ` Paste these values again by asking the bar: ${r.envNames.join(", ")}.` : ""}`;
+}
+const page = (title, inner) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title><link rel="stylesheet" href="/cloud/cloud.css"></head><body><div class="wrap"><main class="card">${inner}</main></div></body></html>`;
+const escH = (v) => String(v).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+const importDone = (r) => page("Agent Keyboard", `<p${r.error ? ' class="err"' : ""}>${escH(r.error ?? r.report)}</p><p class="small">You can close this window. The dashboard shows what came over.</p><script>setTimeout(() => window.opener && window.close(), 4000)</script>`);
+function oldSignIn(inst, sb, anon) {
+  const host = new URL(inst.previous.origin).host, js = (v) => JSON.stringify(v).replace(/</g, "\\u003c");
+  return page("Bring your notes over", `<h2>Sign in to ${escH(host)}</h2>
+<p class="small">That Agent Keyboard is older and can only send its notes. Sign in with the email and password you use on its bar. Your password goes to it, not to us.</p>
+<form id="f"><label for="em">Email</label><input id="em" type="email" autocomplete="username" required><label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password" required><div class="row"><button class="btn">Bring the notes over</button></div></form><p id="msg" role="alert"></p>
+<script>
+document.getElementById("f").onsubmit = async (e) => {
+  e.preventDefault();
+  const b = e.target.querySelector("button"), msg = (t, err) => { const m = document.getElementById("msg"); m.textContent = t; m.className = err ? "err" : ""; };
+  b.disabled = true; msg("Signing in…");
+  try {
+    const s = await fetch(${js(sb)} + "/auth/v1/token?grant_type=password", { method: "POST", headers: { apikey: ${js(anon)}, "Content-Type": "application/json" }, body: JSON.stringify({ email: document.getElementById("em").value.trim(), password: document.getElementById("pw").value }) }).then((r) => r.json());
+    if (!s.access_token) throw new Error(s.error_description || s.msg || "Wrong email or password.");
+    msg("Bringing the notes over…");
+    const r = await fetch("/cloud/instances/${inst.id}/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bearer: s.access_token }) }).then((r) => r.json());
+    if (r.error) throw new Error(r.error);
+    msg(r.report + " You can close this window."); setTimeout(() => window.opener && window.close(), 3000);
+  } catch (err) { msg(err.message, true); b.disabled = false; }
+};
+</script>`);
+}
+
 // Spec #16: "Allow this agent to talk with your other sites' agents". A grant in a Custom API connector for BASE (this Sprite only):
 // the Sprite's egress adds it, so the token never reaches the Sprite. ~/ak-mcp.json points Claude Code at the
 // gateway; the Sprite server passes it only to owners' turns. A marked line in ~/.claude/CLAUDE.md says what it's for.
@@ -773,6 +827,28 @@ async function dispatch(req, res, u, s, b) {
       if (!inst) return redirect(res, "/dashboard");
       return redirect(res, await handoff(inst, inst.email));
     }
+    // Spec 19: bring an older bar's notes and memory over. The popup goes to the old instance's consent page,
+    // which signs in there and comes back to .../done with a single-use export token; the Sprite pulls the bundle itself.
+    const im = u.pathname.match(/^\/cloud\/import\/([\w-]+)(\/done)?$/);
+    if (req.method === "GET" && im) {
+      const inst = s && load().find((i) => i.id === im[1] && i.email === s.email);
+      if (!inst?.previous) return send(res, 404, "Nothing to bring over.", "text/plain; charset=utf-8");
+      const { origin, siteId } = inst.previous;
+      if (im[2]) {
+        if (u.searchParams.get("origin") !== origin || u.searchParams.get("site") !== siteId || !u.searchParams.get("token")) return send(res, 400, "That link doesn't match this site.", "text/plain; charset=utf-8");
+        const r = await runImport(inst, { token: u.searchParams.get("token") });
+        return send(res, 200, importDone(r), "text/html; charset=utf-8");
+      }
+      const consent = `${origin}/export-consent?site=${encodeURIComponent(siteId)}&return=${encodeURIComponent(`${BASE}/cloud/import/${inst.id}/done`)}`;
+      const st = await fetch(consent).then((r) => r.status, () => 0);
+      if (st === 200) return redirect(res, consent);
+      if (st !== 404) return send(res, 200, importDone({ error: st ? `${new URL(origin).host} doesn't have the site ${siteId} any more (${st}).` : `Couldn't reach ${new URL(origin).host}.` }), "text/html; charset=utf-8");
+      // Older instances have no /export: sign in to their Supabase here (in the browser) and bring the notes over.
+      const js = await fetch(`${origin}/widget.js`).then((r) => (r.ok ? r.text() : ""), () => "");
+      const sb = js.match(/https:\/\/[a-z0-9-]+\.supabase\.(?:co|in)/)?.[0], anon = js.match(/eyJ[\w-]+\.[\w-]+\.[\w-]+|sb_publishable_[\w-]+/)?.[0];
+      if (!sb || !anon) return send(res, 200, importDone({ error: `${new URL(origin).host} is an older Agent Keyboard. Update it first (tell its bar "update yourself"), then try again.` }), "text/html; charset=utf-8");
+      return send(res, 200, oldSignIn(inst, sb, anon), "text/html; charset=utf-8");
+    }
     // A teammate's join link: single-use, 7 days. Signs them in to the bar on that site.
     const j = u.pathname.match(/^\/cloud\/join\/([\w-]{20,})$/);
     if (req.method === "GET" && j) {
@@ -793,13 +869,21 @@ async function dispatch(req, res, u, s, b) {
       (updating ?? Promise.resolve()).then(tick); // after any pass already running (it may have used the old version)
       return send(res, 202, "updating", "text/plain");
     }
-    const m = u.pathname.match(/^\/cloud\/instances\/([\w-]+)\/(restart|update|autoupdate|delete|tag|pages|domain|domain-remove|invite|uninvite|mcp|email|email-remove)$/);
+    const m = u.pathname.match(/^\/cloud\/instances\/([\w-]+)\/(restart|update|autoupdate|delete|tag|pages|domain|domain-remove|invite|uninvite|mcp|email|email-remove|import|import-skip)$/);
     if (req.method === "POST" && m) {
       const inst = s && load().find((i) => i.id === m[1] && i.email === s.email);
       if (!inst) return send(res, 404, { error: "No such instance" });
       if (m[2] === "autoupdate") {
         upsert({ ...inst, autoUpdate: inst.autoUpdate === false });
         return send(res, 200, { ok: true });
+      }
+      if (m[2] === "import-skip") {
+        upsert({ ...inst, migrate: { state: "skipped" } });
+        return send(res, 200, { ok: true });
+      }
+      if (m[2] === "import") { // the notes-only fallback page, with the user's session on the old instance
+        if (!inst.previous || typeof b?.bearer !== "string") return send(res, 400, { error: "Nothing to bring over" });
+        return send(res, 200, await runImport(inst, { bearer: b.bearer }));
       }
       if (m[2] === "mcp") {
         await siteMcp(inst, b?.talk === true, b?.manage === true);
@@ -822,8 +906,8 @@ async function dispatch(req, res, u, s, b) {
       if (m[2] === "tag") {
         const gu = ghUser(s.login);
         if (!gu || inst.starter) return send(res, gu ? 400 : 401, { error: gu ? "Starter sites already have the bar" : "Sign in with GitHub again" });
-        const path = await addTag(gu.token, inst.repo, inst.tag, inst.staging ? "ak-staging" : undefined);
-        upsert({ ...inst, tagPath: path });
+        const { path, previous } = await addTag(gu.token, inst.repo, inst.tag, inst.staging ? "ak-staging" : undefined);
+        upsert({ ...inst, tagPath: path, previous: inst.previous ?? previous });
         return send(res, 200, { ok: true, path });
       }
       if (m[2] === "domain" || m[2] === "domain-remove") {

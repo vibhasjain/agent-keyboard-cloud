@@ -126,11 +126,11 @@ export async function provision(opts, progress = () => {}) {
   }
 
   const live = repo.default_branch || "main";
-  let tagPath = null;
+  let tagPath = null, previous = null;
   if (staging) {
     progress(`github: creating the ${STAGING} branch`);
     await ensureBranch(githubToken, repo.full_name, live, STAGING);
-    tagPath = await addTag(githubToken, repo.full_name, scriptTag(url, siteId), STAGING).catch(() => null);
+    ({ path: tagPath, previous } = await addTag(githubToken, repo.full_name, scriptTag(url, siteId), STAGING).catch(() => ({ path: null, previous: null })));
   }
   const site = { id: siteId, repo: repo.ssh_url, branch: staging ? STAGING : live, domain };
   const memory = staging ? stagingMemory(STAGING, live) : "";
@@ -175,7 +175,7 @@ export async function provision(opts, progress = () => {}) {
   progress("bar: sign-in account");
   await ensureBarUser(supabase, email);
 
-  return { sprite: name, url, siteId, repo: repo.full_name, domain, connection: conn.id, tag: scriptTag(url, siteId), starter, staging, tagPath };
+  return { sprite: name, url, siteId, repo: repo.full_name, domain, connection: conn.id, tag: scriptTag(url, siteId), starter, staging, tagPath, previous };
 }
 
 /** The bar signs in against our Supabase: create the account (confirmed, no email: sign-in is by handoff link) unless it exists. */
