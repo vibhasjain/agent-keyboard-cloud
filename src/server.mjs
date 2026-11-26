@@ -31,7 +31,8 @@ const PAGES = new URL("../public/", import.meta.url);
 
 // ---- store: one JSON file of instances; the Fly assertion is AES-256-GCM encrypted ----
 const DB = `${DATA}/instances.json`;
-const load = () => (existsSync(DB) ? JSON.parse(readFileSync(DB, "utf8")) : []);
+// Oldest first: upsert re-appends what it updates, so the file's order moves whenever a site changes.
+const load = () => (existsSync(DB) ? JSON.parse(readFileSync(DB, "utf8")) : []).sort((a, b) => String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? "")));
 function save(list) {
   const before = new Map(load().map((i) => [i.id, JSON.stringify(i)])), after = new Set(list.map((i) => i.id));
   for (const i of list) if (before.get(i.id) !== JSON.stringify(i)) notify(i.email);
