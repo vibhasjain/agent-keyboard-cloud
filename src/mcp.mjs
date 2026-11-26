@@ -213,8 +213,12 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
   }
   // Wait up to `ms` for a job's reply, then describe where it is.
   async function reply(inst, job, ms) {
-    for (const end = Date.now() + ms; ; await new Promise((r) => setTimeout(r, 2500))) {
-      const j = await bar(inst, `/jobs/${encodeURIComponent(job)}`).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
+    const end = Date.now() + ms, still = (j) => `Still working${j?.status === "queued" ? " (queued behind another request)" : j?.status_line?.detail ? `: ${j.status_line.detail}` : ""}. Call get_reply with site ${inst.id} and job ${job} to keep waiting.`;
+    for (; ; await new Promise((r) => setTimeout(r, Math.min(2500, Math.max(0, end - Date.now()))))) {
+      // Each poll gets only the time left (a slow or sleeping Sprite must not hold the call past the proxies).
+      const j = await bar(inst, `/jobs/${encodeURIComponent(job)}`, { signal: AbortSignal.timeout(Math.max(1500, end - Date.now())) })
+        .catch((e) => (e.name === "TimeoutError" ? undefined : e.status === 404 ? null : Promise.reject(e)));
+      if (j === undefined) return still();
       if (!j) return `Job ${job} isn't tracked any more (finished jobs are kept 15 minutes). Call read_conversation for the reply.`;
       if (typeof j.result?.reply === "string") {
         const g = j.result.git ?? {};
@@ -226,7 +230,7 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
         ].filter(Boolean).join("\n");
       }
       if (j.error || j.status === "error" || j.status === "interrupted") return `The agent stopped: ${j.error?.detail ?? j.status}`;
-      if (Date.now() > end) return `Still working${j.status === "queued" ? " (queued behind another request)" : j.status_line?.detail ? `: ${j.status_line.detail}` : ""}. Call get_reply with site ${inst.id} and job ${job} to keep waiting.`;
+      if (Date.now() >= end) return still(j);
     }
   }
 
