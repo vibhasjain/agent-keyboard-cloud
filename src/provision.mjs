@@ -1,6 +1,6 @@
 // Provision one managed Agent Keyboard: a Sprite in the user's own Fly account running
 // the bar for one site. With `repo` the user brings their site and gets a script tag;
-// without it we create a starter repo that the Sprite also hosts (SITES serve:true).
+// without it we create a starter repo. Every site is then hosted on Cloudflare Pages (server.mjs).
 
 import { randomBytes } from "node:crypto";
 import { mint, sprites } from "./fly.mjs";
@@ -29,11 +29,10 @@ export function scriptTag(spriteUrl, siteId) {
 const STAGING = "ak-staging";
 
 /** The Sprite agent's user memory for a staged site: where changes go and how to ship them. */
-function stagingMemory(url, staging, live) {
+function stagingMemory(staging, live) {
   return `# Staging and live
 
-This site is staged. Your pushes go to the \`${staging}\` branch, which this Sprite serves as a preview at ${url}. Nothing you push there reaches the live site.
-If the repo has an npm \`dev\` script, the preview runs it (hot reload); after changing dependencies, run \`npm install\` in the checkout.
+This site is staged. Your pushes go to the \`${staging}\` branch. Nothing you push there reaches the live site.
 
 The live site deploys from \`${live}\` (wherever the owner's host builds it). When the owner asks to deploy, publish, ship or "go live":
 1. Make sure everything is committed and pushed to \`${staging}\`.
@@ -110,9 +109,7 @@ export async function provision(opts, progress = () => {}) {
 
   progress(`sprite: creating ${name}`);
   const url = await ensureSprite(api, name);
-  // A starter site lives on the Sprite; a brought site is wherever its homepage is.
-  // A brought site with no domain is staged: the Sprite serves the STAGING branch as a preview and the
-  // bar pushes there; "deploy to live" (its ~/.claude/CLAUDE.md) pushes it to the default branch.
+  // A brought site with no domain is staged: the bar pushes to the STAGING branch (Pages previews it); "deploy to live" (its ~/.claude/CLAUDE.md) pushes it to the default branch.
   const staging = !starter && !opts.domain;
   const domain = starter || staging ? new URL(url).host : opts.domain;
 
@@ -135,8 +132,8 @@ export async function provision(opts, progress = () => {}) {
     await ensureBranch(githubToken, repo.full_name, live, STAGING);
     tagPath = await addTag(githubToken, repo.full_name, scriptTag(url, siteId), STAGING).catch(() => null);
   }
-  const site = { id: siteId, repo: repo.ssh_url, branch: staging ? STAGING : live, domain, ...(starter || staging ? { serve: true } : {}) };
-  const memory = staging ? stagingMemory(url, STAGING, live) : "";
+  const site = { id: siteId, repo: repo.ssh_url, branch: staging ? STAGING : live, domain };
+  const memory = staging ? stagingMemory(STAGING, live) : "";
   const env = {
     PORT: "8080",
     AGENT_DATA_DIR: "/data",
