@@ -13,7 +13,7 @@ import { z } from "zod";
 
 // A site agent (spec #16) gets the relay tools; the manage tools only when allowed; never the setup tools.
 const SITE_TOOLS = ["whoami", "list_sites", "domain_status"]; // with either switch
-const TALK_TOOLS = ["read_conversation", "send_message", "get_reply"];
+const TALK_TOOLS = ["read_conversation", "send_message", "get_reply", "list_sandboxes"];
 const MANAGE_TOOLS = ["site_action", "add_domain", "remove_domain", "invite_teammate", "remove_teammate"];
 const ACCESS_TTL = 3600e3, REFRESH_TTL = 90 * 864e5, CODE_TTL = 5 * 60e3;
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
@@ -242,6 +242,8 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
     }
     const text = (o) => ({ content: [{ type: "text", text: typeof o === "string" ? o : JSON.stringify(o, null, 1) }] });
     const site = z.string().regex(/^[\w-]+$/).describe("The site's Sprite id, e.g. ak-my-site (from list_sites)");
+    const sandbox = z.string().regex(/^[a-z0-9-]+$/).optional().describe("A sandbox's name (from list_sandboxes) to talk to its agent instead of the live site's.");
+    const sid = (inst, sb) => (sb ? `${inst.siteId}--sb-${sb}` : inst.siteId);
     const open = (id) => `${BASE}/cloud/open/${id}`;
 
     function describe(f) {
@@ -281,7 +283,7 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
     const find = async (id) => (await sites()).find((i) => i.id === id) ?? Promise.reject(new Error(`No site ${id}. Call list_sites.`));
 
     const server = new McpServer({ name: "agent-keyboard", version: "1.0.0" }, {
-      instructions: agent ? `These tools reach the user's Agent Keyboard sites. You are the agent of site ${agent.from}. list_sites lists them all.${agent.talk ? " read_conversation shows another site's recent conversation; send_message asks that site's own agent for a change (it edits and ships that site's repo)." : ""}${agent.manage ? " You may restart, update or delete sites (this one included: restarting or updating it ends your turn), manage their domains and teammates: confirm anything destructive with the user first." : ""}` : `Agent Keyboard puts a prompt bar on a website; a Claude Code session behind it edits the site's repo and ships. These tools set it up and manage it for the signed-in user, the same as ${BASE}/start and ${BASE}/dashboard. To change a site itself, use send_message: it goes to that site's own agent, like typing in its bar (get_reply waits for longer edits; read_conversation shows the history). Setup order: connect_cloudflare, list_repos, start_setup, then setup_status until done (it says what the user does at each step). Never ask the user to paste a token, password or code into the chat: those go on ${BASE}/start.`,
+      instructions: agent ? `These tools reach the user's Agent Keyboard sites. You are the agent of site ${agent.from}. list_sites lists them all.${agent.talk ? " read_conversation shows another site's recent conversation; send_message asks that site's own agent for a change (it edits and ships that site's repo); with a sandbox name (list_sandboxes) they reach that sandbox's agent instead, this site's own sandboxes included." : ""}${agent.manage ? " You may restart, update or delete sites (this one included: restarting or updating it ends your turn), manage their domains and teammates: confirm anything destructive with the user first." : ""}` : `Agent Keyboard puts a prompt bar on a website; a Claude Code session behind it edits the site's repo and ships. These tools set it up and manage it for the signed-in user, the same as ${BASE}/start and ${BASE}/dashboard. To change a site itself, use send_message: it goes to that site's own agent, like typing in its bar (or to one of its sandboxes' agents: list_sandboxes) (get_reply waits for longer edits; read_conversation shows the history). Setup order: connect_cloudflare, list_repos, start_setup, then setup_status until done (it says what the user does at each step). Never ask the user to paste a token, password or code into the chat: those go on ${BASE}/start.`,
     });
 
     if (agent) {
@@ -378,29 +380,38 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
       return text(`Removed ${email}.`);
     });
     const mine = (id) => load().find((i) => i.id === id && i.email === s.email) ?? Promise.reject(new Error(`No site ${id}. Call list_sites.`));
+    server.registerTool("list_sandboxes", {
+      description: "A site's open sandboxes (private copies with their own preview URL and agent): name, preview URL, who made it, last activity. Pass the name as `sandbox` to send_message or read_conversation (get_reply needs only the job id).",
+      inputSchema: { site }, annotations: { readOnlyHint: true },
+    }, async ({ site: id }) => {
+      const inst = await mine(id), { sandboxes = [] } = await bar(inst, `/sites/${inst.siteId}/sandboxes`);
+      return text(sandboxes.length ? sandboxes : `${id} has no open sandboxes.`);
+    });
     server.registerTool("send_message", {
       description: "Ask a site's own agent (the Claude Code session behind its bar) to change the site, the same as typing in the bar: it edits the repo, commits and pushes, and the site redeploys. Shares the bar's conversation. Waits about 20 seconds; if the agent isn't done, returns a job id for get_reply. Never resend because a reply is slow: read_conversation shows whether it arrived.",
       inputSchema: {
         site,
         message: z.string().min(1).max(20000).describe("The request, in the user's words."),
         photos: z.array(z.string()).max(4).optional().describe("Images for the agent (screenshots, mockups): https URLs, or base64 image data (a data:image/...;base64, URL or raw base64)."),
+        sandbox,
       },
-    }, async ({ site: id, message, photos = [] }) => {
-      if (agent && id === agent.from) throw new Error("That's this site. Do the change yourself; send_message is for the user's other sites.");
+    }, async ({ site: id, message, photos = [], sandbox: sb }) => {
+      if (agent && id === agent.from && !sb) throw new Error("That's this site. Do the change yourself; send_message is for the user's other sites.");
       const inst = await mine(id);
       if (agent) message = `[from your ${agent.from} agent] ${message}`;
       const attachmentIds = [];
       for (const p of photos) {
         const form = new FormData();
         form.append("photo", await photo(p), "photo");
-        attachmentIds.push((await bar(inst, `/sites/${inst.siteId}/uploads`, { method: "POST", body: form })).id);
+        attachmentIds.push((await bar(inst, `/sites/${sid(inst, sb)}/uploads`, { method: "POST", body: form })).id);
       }
       const entry = { text: message, at: Date.now(), job: null };
-      sent.set(inst.id, [...(sent.get(inst.id) ?? []).filter((x) => Date.now() - x.at < 15 * 60e3), entry]);
+      const key = sid(inst, sb);
+      sent.set(key, [...(sent.get(key) ?? []).filter((x) => Date.now() - x.at < 15 * 60e3), entry]);
       // The response is the job's SSE stream; take the job id and detach (the job keeps running).
       // A sleeping Sprite can take longer than WAIT to answer, so don't wait for it past the deadline.
       const jobP = (async () => {
-        const res = await bar(inst, `/sites/${inst.siteId}/messages`, {
+        const res = await bar(inst, `/sites/${sid(inst, sb)}/messages`, {
           method: "POST", raw: true, headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: message, page: "/", attachmentIds, idemKey: randomUUID() }),
         });
@@ -427,13 +438,13 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
     }, async ({ site: id, job }) => text(await reply(await mine(id), job, WAIT)));
     server.registerTool("read_conversation", {
       description: "The recent messages between the user and a site's agent (from the bar or send_message), oldest first.",
-      inputSchema: { site, limit: z.number().int().min(1).max(50).optional().describe("How many messages (default 20).") },
+      inputSchema: { site, limit: z.number().int().min(1).max(50).optional().describe("How many messages (default 20)."), sandbox },
       annotations: { readOnlyHint: true },
-    }, async ({ site: id, limit = 20 }) => {
+    }, async ({ site: id, limit = 20, sandbox: sb }) => {
       const inst = await mine(id);
-      const { messages } = await bar(inst, `/sites/${inst.siteId}/conversation?limit=${limit}`);
+      const { messages } = await bar(inst, `/sites/${sid(inst, sb)}/conversation?limit=${limit}`);
       // Relayed messages the agent hasn't written to its transcript yet (still waking, queued or just starting).
-      const pending = (sent.get(inst.id) ?? []).filter((x) => Date.now() - x.at < 15 * 60e3 && !messages.some((m) => m.role === "user" && m.text?.includes(x.text.slice(0, 200))));
+      const pending = (sent.get(sid(inst, sb)) ?? []).filter((x) => Date.now() - x.at < 15 * 60e3 && !messages.some((m) => m.role === "user" && m.text?.includes(x.text.slice(0, 200))));
       return text([
         ...messages.filter((m) => m.text).map((m) => `${m.role}${m.ts ? ` (${m.ts.slice(0, 16).replace("T", " ")})` : ""}: ${m.text}`),
         ...pending.map((x) => `user (${new Date(x.at).toISOString().slice(0, 16).replace("T", " ")}, ${x.error ? `not delivered: ${x.error}` : `sent, the agent hasn't picked it up yet${x.job ? `; get_reply job ${x.job}` : ""}`}): ${x.text}`),
