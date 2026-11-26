@@ -16,7 +16,7 @@ import { mcp } from "./mcp.mjs";
 import { addTag, getRepo, putSecret, putVariable, writeFile } from "./github.mjs";
 import { TOKEN_URL, WORKFLOW, addPagesDomain, addRecords, cnameOf, ensureProject, findZone, isApex, pagesDomain, pagesMemory, pointDns, removePagesDomain, verify, accountLabel } from "./cloudflare.mjs";
 import { provision, slug, spriteName } from "./provision.mjs";
-import { deleteKey, ensureDomain, fqdn, getDomain, sendingKey, verifyDomain } from "./resend.mjs";
+import { checkKey, deleteKey, ensureDomain, fqdn, getDomain, sendingKey, verifyDomain } from "./resend.mjs";
 
 const env = process.env;
 const DATA = env.DATA_DIR ?? "./data";
@@ -90,6 +90,12 @@ const CF = `${DATA}/cloudflare.json`;
 let cfs;
 try { cfs = new Map(Object.entries(existsSync(CF) ? JSON.parse(open(readFileSync(CF, "utf8"))) : {})); } catch { cfs = new Map(); }
 const saveCfs = () => writeFileSync(CF, seal(JSON.stringify(Object.fromEntries(cfs))), { mode: 0o600 });
+// email → { key (sealed), label }: the user's Resend connection (spec #17), reused for every site's email.
+const RS = `${DATA}/resend.json`;
+let resends;
+try { resends = new Map(Object.entries(existsSync(RS) ? JSON.parse(open(readFileSync(RS, "utf8"))) : {})); } catch { resends = new Map(); }
+const saveResends = () => writeFileSync(RS, seal(JSON.stringify(Object.fromEntries(resends))), { mode: 0o600 });
+const resendKey = (email) => resends.get(email) && open(resends.get(email).key);
 const ghUser = (login) => { const u = users.get(login); return u && u.exp > Date.now() ? u : null; };
 const keep = (u) => ({ token: u.token, exp: Date.now() + (u.expiresIn ?? 8 * 3600) * 1000 - 60e3, refresh: u.refresh, refreshExp: u.refresh && Date.now() + (u.refreshExpiresIn ?? 15552000) * 1000 - 60e3 });
 // An expired GitHub user token is swapped for a new one with its refresh token, so sign-ins (and MCP connectors) last.
@@ -260,7 +266,13 @@ async function checkDomain(id, c) {
     next.error = e.message;
   }
   const cur = load().find((x) => x.id === id);
-  if (cur?.customDomain?.host === d.host) upsert({ ...cur, customDomain: next });
+  if (cur?.customDomain?.host !== d.host) return;
+  upsert({ ...cur, customDomain: next });
+  // Email was on before the domain changed: set it up again on the new one.
+  if (next.status === "active" && d.status !== "active" && cur.mailWanted && !cur.mail && resendKey(cur.email)) {
+    upsert({ ...load().find((x) => x.id === id), mailWanted: false, mail: { status: "setting up", detail: "starting" } });
+    setupEmail(id);
+  }
 }
 /** After a custom domain change: let the bar on `origin` call the Sprite (CORS, EXTRA_ORIGINS), and
  *  rewrite the agent's memory so it knows the site's address and has the Cloudflare token. */
@@ -374,40 +386,48 @@ async function siteMcp(inst, talk, manage) {
   ].join(" && "), { timeoutMs: 60e3 });
 }
 // ---- email from the site's own domain (spec #17) ----
-// The pasted full-access Resend key stays in memory (this function's scope) and is never stored. With it: the domain
-// in Resend (the Cloudflare zone's root, e.g. example.com), its DNS records in that zone, and a sending-only key for that
-// one domain, which goes on the Sprite. We watch for verification up to an hour; Resend keeps checking after that.
+// With the user's Resend key (connected once, like Cloudflare): the domain in Resend (the Cloudflare zone's root, e.g.
+// example.com), its DNS records in that zone, and a sending-only key for that one domain, which goes on the Sprite.
 const EMAIL_NOTE = "<!-- ak-email -->";
-async function setupEmail(id, key) {
-  const set = (patch) => { const cur = load().find((x) => x.id === id); if (cur?.mail) upsert({ ...cur, mail: { ...cur.mail, ...patch } }); };
+const setMail = (id, patch) => { const cur = load().find((x) => x.id === id); if (cur?.mail) upsert({ ...cur, mail: { ...cur.mail, ...patch } }); };
+async function setupEmail(id) {
   try {
-    const inst = load().find((x) => x.id === id), c = cfs.get(inst.email), token = open(c.token);
+    const inst = load().find((x) => x.id === id), c = cfs.get(inst.email), token = open(c.token), key = resendKey(inst.email);
+    if (!key) throw new Error("Connect Resend first");
     const zone = await findZone(token, c.accountId, inst.customDomain.host);
     const domain = zone?.name ?? inst.customDomain.host.replace(/^www\./, "");
-    set({ domain, detail: "adding the domain to Resend" });
+    setMail(id, { domain, detail: "adding the domain to Resend" });
     const d = await ensureDomain(key, domain);
     // In Cloudflare we write full names; elsewhere the user gets Resend's own (relative) names, as on resend.com.
     const records = (d.records ?? []).map((r) => ({ type: r.type, name: zone ? fqdn(r.name, domain) : r.name, content: r.value, ...(r.priority != null ? { priority: r.priority } : {}) }));
-    if (zone) { set({ detail: "adding its DNS records to Cloudflare" }); await addRecords(token, zone.id, records); }
-    for (const old of new Set([inst.mail?.keyId, inst.mailOldKey].filter(Boolean))) await deleteKey(key, old).catch(() => {});
+    if (zone) { setMail(id, { detail: "adding its DNS records to Cloudflare" }); await addRecords(token, zone.id, records); }
+    if (inst.mail?.keyId) await deleteKey(key, inst.mail.keyId).catch(() => {});
     const k = await sendingKey(key, d.id, `Agent Keyboard (${inst.siteId})`);
-    set({ domainId: d.id, keyId: k.id, detail: "installing it on your Sprite" });
+    setMail(id, { domainId: d.id, keyId: k.id, detail: "installing it on your Sprite" });
     await emailOnSprite(inst, { token: k.token, domain });
-    const cur = load().find((x) => x.id === id);
-    if (cur?.mail) upsert({ ...cur, mailOldKey: null });
     if (d.status !== "verified") await verifyDomain(key, d.id).catch(() => {});
-    set({ status: d.status === "verified" ? "active" : "verifying", detail: "", from: `notify@${domain}`, records: zone ? null : records });
-    for (let t = 1; t <= 120 && d.status !== "verified"; t++) {
-      await new Promise((r) => setTimeout(r, 30e3));
-      if (load().find((x) => x.id === id)?.mail?.keyId !== k.id) return; // removed or redone meanwhile
-      const now = (await getDomain(key, d.id).catch(() => null))?.status;
-      if (now === "verified") return set({ status: "active", records: null });
-      if (t % 10 === 0) await verifyDomain(key, d.id).catch(() => {});
-    }
+    setMail(id, { status: d.status === "verified" ? "active" : "verifying", detail: "", from: `notify@${domain}`, records: zone ? null : records, since: Date.now() });
+    if (d.status !== "verified") watchEmail(id);
   } catch (e) {
     console.error("email", id, e.message);
-    set({ status: "error", detail: "", error: e.message });
+    setMail(id, { status: "error", detail: "", error: e.message });
   }
+}
+/** Poll Resend until the domain verifies (every 30 s, asking it to re-check every 5 min); Resend gives up after 72 h. Resumes at boot. */
+async function watchEmail(id) {
+  for (let t = 1; ; t++) {
+    await new Promise((r) => setTimeout(r, 30e3));
+    const i = load().find((x) => x.id === id), key = i && resendKey(i.email);
+    if (i?.mail?.status !== "verifying" || !key) return;
+    const now = (await getDomain(key, i.mail.domainId).catch(() => null))?.status;
+    if (now === "verified") return setMail(id, { status: "active", records: null });
+    if (now === "failed" || Date.now() - (i.mail.since ?? 0) > 72 * 3600e3) return setMail(id, { status: "error", error: `Resend couldn't verify ${i.mail.domain}. Check its DNS records, then set up email again.` });
+    if (t % 10 === 0) await verifyDomain(key, i.mail.domainId).catch(() => {});
+  }
+}
+for (const i of load()) {
+  if (i.mail?.status === "verifying") watchEmail(i.id);
+  else if (i.mail?.status === "setting up") upsert({ ...i, mail: { ...i.mail, status: "error", detail: "", error: "Setup was interrupted. Try again." } });
 }
 /** Put the sending key on the Sprite (or take it off: e = null), with a line in the agent's memory, and restart the bar. */
 async function emailOnSprite(inst, e) {
@@ -422,11 +442,12 @@ async function emailOnSprite(inst, e) {
     `sprite-env services restart ak`,
   ].join(" && "), { timeoutMs: 120e3 });
 }
-/** Stop sending email: off the Sprite now. Its key is deleted the next time a full key is pasted (or by the user on resend.com). */
-async function removeEmail(inst) {
+/** Stop sending email: the key comes off the Sprite and is deleted on Resend. `wanted`: set it up again on the next domain. */
+async function removeEmail(inst, wanted = false) {
   await emailOnSprite(inst, null);
-  const cur = load().find((x) => x.id === inst.id) ?? inst;
-  upsert({ ...cur, mail: null, mailOldKey: cur.mail?.keyId ?? cur.mailOldKey ?? null });
+  const key = resendKey(inst.email);
+  if (key && inst.mail?.keyId) await deleteKey(key, inst.mail.keyId).catch(() => {});
+  upsert({ ...(load().find((x) => x.id === inst.id) ?? inst), mail: null, mailWanted: wanted });
 }
 /** Add or remove a teammate on the Sprite's bar allow-list (the server rereads it within 10 s). */
 async function teamOnSprite(inst, email, add) {
@@ -562,7 +583,7 @@ const routes = {
   "GET /cloud/me": (q, req, res, s) => {
     if (!s) return send(res, 200, { signedIn: false, app: appReady() });
     const inst = load().find((i) => i.email === s.email);
-    send(res, 200, { signedIn: true, login: s.login, email: s.email, github: !!ghUser(s.login), installUrl: appReady() ? installUrl("start") : null, instance: inst && pub(inst), cloudflare: accountLabel(cfs.get(s.email)?.accountName), fly: !!flyOf(s.email), claudeSignIn: !!claudeOf(s.email), cloudflareTokenUrl: TOKEN_URL, claude: mcpServer.claude(s.login), events: eventsUrl(s.email), flow: flowView(flows.get(s.email)) });
+    send(res, 200, { signedIn: true, login: s.login, email: s.email, github: !!ghUser(s.login), installUrl: appReady() ? installUrl("start") : null, instance: inst && pub(inst), cloudflare: accountLabel(cfs.get(s.email)?.accountName), resend: resends.get(s.email)?.label ?? null, fly: !!flyOf(s.email), claudeSignIn: !!claudeOf(s.email), cloudflareTokenUrl: TOKEN_URL, claude: mcpServer.claude(s.login), events: eventsUrl(s.email), flow: flowView(flows.get(s.email)) });
   },
   "GET /cloud/repos": async (q, req, res, s) => {
     const u = s && ghUser(s.login);
@@ -624,6 +645,18 @@ const routes = {
       setupPages(i.id, gu.token, cfs.get(s.email));
     }
     send(res, 200, { accountName: a.accountName });
+  },
+
+  // Connect Resend once (spec #17): check the pasted key can manage domains, keep it sealed for every site's email.
+  "POST /cloud/resend": async (q, req, res, s, b) => {
+    if (!s) return send(res, 401, { error: "Sign in" });
+    const key = String(b.key ?? "").trim();
+    if (!/^re_[\w-]{10,}$/.test(key)) return send(res, 400, { error: "Paste the API key Resend showed you (it starts with re_)" });
+    await checkKey(key);
+    resends.set(s.email, { key: seal(key), label: `key …${key.slice(-4)}` });
+    saveResends();
+    notify(s.email);
+    send(res, 200, { ok: true });
   },
 
   "GET /cloud/instances": async (q, req, res, s) => {
@@ -700,7 +733,7 @@ async function dispatch(req, res, u, s, b) {
         if (!c || inst.pages?.state !== "live") return send(res, 400, { error: "Host the site on Cloudflare Pages first" });
         const token = open(c.token);
         if (m[2] === "domain-remove") {
-          if (inst.mail) await removeEmail(inst); // the sender has to be on the site's domain
+          if (inst.mail) await removeEmail(inst, true); // the sender has to be on the site's domain; it follows to the next one
           if (inst.customDomain) await removePagesDomain(token, c.accountId, inst.pages.project, inst.customDomain.host);
           upsert({ ...load().find((x) => x.id === inst.id), customDomain: null });
           await syncDomain(inst.id, c);
@@ -715,12 +748,11 @@ async function dispatch(req, res, u, s, b) {
         return send(res, 200, { ok: true });
       }
       if (m[2] === "email") {
-        const key = String(b?.key ?? "").trim();
         if (inst.customDomain?.status !== "active" || !cfs.get(s.email)) return send(res, 400, { error: "Connect your own domain first" });
-        if (!/^re_[\w-]{10,}$/.test(key)) return send(res, 400, { error: "Paste a Resend API key (it starts with re_)" });
+        if (!resends.get(s.email)) return send(res, 400, { error: "Connect Resend first" });
         if (inst.mail?.status === "setting up") return send(res, 409, { error: "Already setting up" });
         upsert({ ...inst, mail: { ...inst.mail, status: "setting up", detail: "starting", error: null } });
-        setupEmail(inst.id, key);
+        setupEmail(inst.id);
         return send(res, 200, { ok: true });
       }
       if (m[2] === "email-remove") {

@@ -1,5 +1,5 @@
-// Email from the site's own domain (spec #17), with the user's Resend key. The full key is only held in
-// memory while we set up; the Sprite gets a sending-only key for that one domain.
+// Email from the site's own domain (spec #17), with the user's Resend key (connected once, kept sealed on the
+// control plane). The Sprite only gets a sending-only key for its one domain.
 
 async function rs(key, method, path, body) {
   const res = await fetch(`https://api.resend.com${path}`, {
@@ -15,6 +15,8 @@ async function rs(key, method, path, body) {
   return data;
 }
 
+/** Throws unless the key can manage domains (a Full access key). */
+export const checkKey = (key) => rs(key, "GET", "/domains");
 /** The Resend domain `name` (created if missing), with its DNS records. */
 export async function ensureDomain(key, name) {
   const { data = [] } = await rs(key, "GET", "/domains");
