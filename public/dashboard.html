@@ -123,7 +123,7 @@ async function render(note) {
         <div class="meta"><label class="auto perm" title="It can read your other sites' conversations and start one with their agents to ask for changes. Only on your messages, not teammates'.">Allow this agent to talk with your other sites' agents<button class="switch" role="switch" aria-checked="${!!i.mcp && i.mcp.talk !== false}" data-a="mcp-talk"></button></label></div>
         <div class="meta"><label class="auto perm" title="Restart, update or delete any of your sites, this one included, and manage their domains and teammates. It confirms destructive steps with you first.">Allow it to manage your Agent Keyboard sites, this one too<button class="switch" role="switch" aria-checked="${!!i.mcp?.manage}" data-a="mcp-manage"></button></label></div>${i.mail || (i.pages?.state === "live" && i.customDomain?.status === "active") ? mail(i, me) : ""}${team(i)}</details><div class="tools"><button class="btn ghost round" data-a="restart" title="Restart (only needed if the bar is stuck)" aria-label="Restart">${ICON.restart}</button><button class="btn ghost round danger" data-a="delete" title="Delete site" aria-label="Delete site"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/></svg></button></div><a class="btn primary" href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener">Open site</a></div>
     </div>`;
-  }).join("") + (list.length ? `<p class="small hint">Bar not showing? Open from here to enable.</p>` : "") + `${me.cloudflare ? `<p class="small acct">Cloudflare: connected (${esc(me.cloudflare)}) · <a href="#" id="cfre">Use a different token</a></p>` : ""}${me.resend ? `<p class="small acct">Resend: connected (${esc(me.resend)}) · <a href="#" id="rsre">Use a different key</a></p>` : ""}<div id="cfslot"></div>`;
+  }).join("") + (list.length ? `<p class="small hint">Bar not showing? Open from here to enable.</p>` : "") + `${me.cloudflare ? `<p class="small acct">Cloudflare: connected (${esc(me.cloudflare)}) · <a href="#" id="cfre">Use a different token</a> · <a href="#" id="cfx">Disconnect</a></p>` : ""}${me.resend ? `<p class="small acct">Resend: connected (${esc(me.resend)}) · <a href="#" id="rsre">Use a different key</a> · <a href="#" id="rsx-acct">Disconnect</a></p>` : ""}<div id="cfslot"></div>`;
   for (const id of advanced()) $app.querySelector(`.inst[data-id="${CSS.escape(id)}"] details.more`)?.setAttribute("open", "");
   clearTimeout(timer);
   if (list.some((i) => i.pages?.state === "setting up" || i.mail?.status === "setting up")) timer = setTimeout(() => render(note), 3000);
@@ -193,6 +193,12 @@ async function render(note) {
     };
   };
   if (!me.cloudflare) wire();
+  const disconnect = (id, path, msg) => document.getElementById(id)?.addEventListener("click", (e) => {
+    e.preventDefault();
+    if (confirm(msg)) api(path, {}).then(() => render(), (err) => render(err.message));
+  });
+  disconnect("cfx", "cloudflare/remove", "Disconnect Cloudflare? We delete our copy of your token. Sites already on Cloudflare Pages keep deploying with the copy in each repo's GitHub secrets; revoke the token on Cloudflare to stop those too.");
+  disconnect("rsx-acct", "resend/remove", "Disconnect Resend? We delete our copy of your key. Each site keeps its own sending-only key; delete those on Resend to stop its email.");
   document.getElementById("cfre")?.addEventListener("click", (e) => {
     e.preventDefault();
     const slot = document.getElementById("cfslot");

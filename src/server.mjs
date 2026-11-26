@@ -392,7 +392,8 @@ const EMAIL_NOTE = "<!-- ak-email -->";
 const setMail = (id, patch) => { const cur = load().find((x) => x.id === id); if (cur?.mail) upsert({ ...cur, mail: { ...cur.mail, ...patch } }); };
 async function setupEmail(id) {
   try {
-    const inst = load().find((x) => x.id === id), c = cfs.get(inst.email), token = open(c.token), key = resendKey(inst.email);
+    const inst = load().find((x) => x.id === id), c = cfs.get(inst.email), token = c && open(c.token), key = resendKey(inst.email);
+    if (!c) throw new Error("Connect Cloudflare first");
     if (!key) throw new Error("Connect Resend first");
     const zone = await findZone(token, c.accountId, inst.customDomain.host);
     const domain = zone?.name ?? inst.customDomain.host.replace(/^www\./, "");
@@ -662,6 +663,20 @@ const routes = {
     await checkKey(key);
     resends.set(s.email, { key: seal(key), label: `key …${key.slice(-4)}` });
     saveResends();
+    notify(s.email);
+    send(res, 200, { ok: true });
+  },
+
+  // Disconnect: forget our sealed copy. Copies already handed out (repo secrets, each site's own key) stay until revoked at the source.
+  "POST /cloud/cloudflare/remove": (q, req, res, s) => {
+    if (!s) return send(res, 401, { error: "Sign in" });
+    if (cfs.delete(s.email)) saveCfs();
+    notify(s.email);
+    send(res, 200, { ok: true });
+  },
+  "POST /cloud/resend/remove": (q, req, res, s) => {
+    if (!s) return send(res, 401, { error: "Sign in" });
+    if (resends.delete(s.email)) saveResends();
     notify(s.email);
     send(res, 200, { ok: true });
   },
