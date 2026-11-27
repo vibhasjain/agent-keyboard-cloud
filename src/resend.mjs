@@ -9,7 +9,8 @@ async function rs(key, method, path, body) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const msg = res.status === 401 || res.status === 403 || /api key/i.test(data.message ?? "") ? "Resend didn't accept that key. Create a Full access key on resend.com/api-keys and paste it again." : `Resend: ${data.message ?? res.statusText}`;
+    // Only a bad or sending-only key gets the "new key" advice; anything else (e.g. a domain the account can't add) is Resend's own words.
+    const msg = /_api_key$/.test(data.name ?? "") || /api key/i.test(data.message ?? "") ? "Resend didn't accept that key. Create a Full access key on resend.com/api-keys and paste it again." : `Resend: ${data.message ?? res.statusText}`;
     throw Object.assign(new Error(msg), { status: res.status, code: res.status < 500 ? 400 : 502 });
   }
   return data;
