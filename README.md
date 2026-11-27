@@ -1,5 +1,7 @@
 # Agent Keyboard Cloud
 
+[![A glowing prompt bar between a pixel-art typewriter and a website, on a purple sky with balloons](https://agentkeyboard.com/cloud-og.jpg)](https://agentkeyboard.com/start)
+
 Your own coding agent, living inside your website, running on your own [Fly.io Sprite](https://sprites.dev).
 
 Open [agentkeyboard.com/start](https://agentkeyboard.com/start), sign in with GitHub, Fly and Claude, and about a minute later your site has a prompt bar in the corner. Type or hold to talk ("make the headline say hello", "add a dark mode"), and a real Claude Code session edits your site's repo, commits and ships it. You watch every step, and the page updates when it's done.
