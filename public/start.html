@@ -38,7 +38,7 @@ const api = async (path, body) => {
   return d;
 };
 // Cloudflare, Fly and Claude are connected once for all your sites; each new site is just pick + install.
-const STEPS = [["cloudflare", "Connect Cloudflare"], ["fly", "Connect Fly.io"], ["claude", "Sign in to Claude"], ["site", "Pick your site"], ["install", "Install Agent Keyboard"], ["done", "Done"]];
+const STEPS = [["cloudflare", "Connect Cloudflare"], ["fly", "Connect Fly.io"], ["claude", "Sign in to Claude"], ["site", "Pick your site and its domain"], ["install", "Install Agent Keyboard"], ["done", "Done"]];
 const order = { cloudflare: 0, fly: 1, claude: 2, connector: 2, site: 3, ready: 3, install: 4, done: 5 };
 const steps = (s) => `<ol class="steps">${STEPS.map(([k, t], i) => `<li class="${i < order[s] || s === "done" ? "ok" : i === order[s] ? "now" : ""}">${t}</li>`).join("")}</ol>`;
 let timer, lastStep, copied = "";
@@ -95,7 +95,7 @@ async function account() {
 async function pick(me, error) {
   let repos = [];
   try { repos = (await api("repos")).repos; } catch (e) { error = e.message; }
-  $app.innerHTML = `<p><b>4. Pick your site.</b> Cloudflare connected (${esc(me.cloudflare)}) · Fly.io connected · Claude connected.</p>
+  $app.innerHTML = `<p><b>4. Pick your site and its domain.</b> Cloudflare connected (${esc(me.cloudflare)}) · Fly.io connected · Claude connected.</p>
     ${error ? `<p class="err">${esc(error)}</p>` : ""}
     <form id="f">
       <label for="repo">Your site's repo</label>
