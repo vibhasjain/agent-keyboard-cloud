@@ -400,7 +400,8 @@ async function autoUpdate() {
   if (busy) setTimeout(tick, 300e3).unref(); // a busy Sprite gets another try soon, not at the next hourly pass
 }
 let updating = null; // one pass at a time (the hourly timer and a release ping can coincide)
-const tick = () => (updating ??= autoUpdate().catch((e) => console.error("autoupdate", e.message)).finally(() => { updating = null; }));
+// A failed pass (e.g. GitHub 504 on the version lookup) retries in 5 minutes, not at the next hourly pass.
+const tick = () => (updating ??= autoUpdate().catch((e) => { console.error("autoupdate", e.message); setTimeout(tick, 300e3).unref(); }).finally(() => { updating = null; }));
 setTimeout(tick, 60e3).unref(); // also right after a deploy, so frequent deploys never starve it
 setInterval(tick, 3600e3).unref();
 
