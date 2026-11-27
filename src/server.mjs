@@ -429,15 +429,27 @@ function siteUrl(inst) {
 }
 /** The site, already signed in to the bar as `email`: a single-use magic-link token the widget redeems from #ak_handoff=. */
 async function handoff(inst, email) {
-  const site = siteUrl(inst);
+  const site = siteUrl(inst), token = await linkToken(email);
+  return token ? `${site}/#ak_handoff=${encodeURIComponent(token)}` : site;
+}
+async function linkToken(email) {
   const r = await fetch(`${supabase.url}/auth/v1/admin/generate_link`, {
     method: "POST",
     headers: { apikey: supabase.serviceKey, Authorization: `Bearer ${supabase.serviceKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({ type: "magiclink", email }),
   }).catch(() => null);
   const d = (await r?.json().catch(() => null)) ?? {};
-  const token = d.hashed_token ?? d.properties?.hashed_token;
-  return token ? `${site}/#ak_handoff=${encodeURIComponent(token)}` : site;
+  return d.hashed_token ?? d.properties?.hashed_token;
+}
+// A Sprite's bar moving to a sandbox preview (POST /auth/handoff there): Sprites don't hold the service key, so they ask us.
+// The caller's own bar session (verified with Supabase) gets a magic-link token for that same email only; the Sprite's key shows it's ours.
+async function sandboxHandoff(req, res) {
+  if (!load().some((i) => i.feedback && i.feedback === sha(String(req.headers["x-ak-feedback"] ?? "")))) return send(res, 401, { error: "unknown instance" });
+  const u = await fetch(`${supabase.url}/auth/v1/user`, { headers: { apikey: supabase.anonKey, Authorization: String(req.headers.authorization ?? "") } }).catch(() => null);
+  const email = u?.ok ? (await u.json().catch(() => null))?.email : null;
+  if (!email) return send(res, 401, { error: "not signed in" });
+  const token = await linkToken(email);
+  return token ? send(res, 200, { token_hash: token }) : send(res, 502, { error: "couldn't mint a handoff token" });
 }
 // ---- spec 19: bring an older bar's notes, memory, settings and skills over ----
 // The Sprite's own server pulls the bundle from the old instance (POST /sites/:id/import, internal secret, loopback).
@@ -1028,6 +1040,7 @@ createServer(async (req, res) => {
     if (s) await fresh(s.login);
     if (await mcpServer(req, res, u, s)) return;
     if (req.method === "POST" && u.pathname === "/cloud/feedback") return await feedback(req, res); // its own 20 KB body cap
+    if (req.method === "POST" && u.pathname === "/cloud/handoff") return await sandboxHandoff(req, res);
     await dispatch(req, res, u, s, req.method === "POST" ? await body(req) : null);
   } catch (e) {
     console.error(req.method, u.pathname, e.message);
