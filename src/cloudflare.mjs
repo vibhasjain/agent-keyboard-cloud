@@ -92,11 +92,14 @@ jobs:
           npx -y wrangler@4 pages deploy "$DIR" --project-name="$PROJECT" --branch="$GITHUB_REF_NAME" --commit-dirty=true
 `;
 
+/** What the agent knows about the owner's Cloudflare token (every site gets it, Pages or not). */
+export const CF_MEMORY = `\`CLOUDFLARE_API_TOKEN\` and \`CLOUDFLARE_ACCOUNT_ID\` in your environment are the owner's Cloudflare token and account (Pages: Edit, DNS: Edit, Zone: Read, Account Settings: Read). Use them for DNS records on their zones and for this Pages project, never ask the owner for another token for those, and never print the token. They can't change redirect rules, page rules or other zone settings: for those, tell the owner exactly what to set in the Cloudflare dashboard.`;
+
 /** The Sprite agent's memory once the site is on Pages. */
 export function pagesMemory({ sub, live, domain, git }) {
   const hosting = `Every push deploys to Cloudflare Pages ${git ? "through the project's own Git integration (Cloudflare builds each push; there's no deploy workflow, don't add one)" : "through the GitHub Actions workflow \`.github/workflows/agent-keyboard-pages.yml\`"} (about a minute after the push): \`${live}\` → https://${sub}${domain ? ` and the custom domain https://${domain} (the site's real address: use it in links, metadata and replies)` : ""}, any other branch → https://<branch>.${sub} (lowercase, \`/\` → \`-\`). ${git ? "" : "Never remove that workflow. "}The site must build to static files (Pages Functions in \`functions/\` are fine); a database has to be hosted (e.g. Supabase), not on this machine.
 
-\`CLOUDFLARE_API_TOKEN\` and \`CLOUDFLARE_ACCOUNT_ID\` in your environment are the owner's Cloudflare token and account (Pages: Edit, DNS: Edit, Zone: Read, Account Settings: Read). Use them for DNS records on their zones and for this Pages project, never ask the owner for another token for those, and never print the token. They can't change redirect rules, page rules or other zone settings: for those, tell the owner exactly what to set in the Cloudflare dashboard.`;
+${CF_MEMORY}`;
   const managed = `# Managed by Agent Keyboard\n\nThis is a managed instance: it was set up and is managed at https://agentkeyboard.com/dashboard (or from Claude through the Agent Keyboard connector). You can't invite people, restart, update or delete this instance yourself. When the owner asks to add a teammate (or remove one), tell them to use Teammates on https://agentkeyboard.com/dashboard, or ask Claude with the Agent Keyboard connector (invite_teammate). They get a join link to send.\n`;
   return `${managed}\n# Hosting\n\n${hosting}\n`;
 }

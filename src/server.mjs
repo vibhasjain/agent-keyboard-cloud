@@ -14,7 +14,7 @@ import { mint, pollClaim, register, sprites } from "./fly.mjs";
 import { appReady, authorizeUrl, createdFromManifest, installationPage, installUrl, loadApp, manifest, refreshUser, signIn, userRepos } from "./githubapp.mjs";
 import { mcp } from "./mcp.mjs";
 import { addTag, getRepo, putSecret, putVariable, writeFile } from "./github.mjs";
-import { TOKEN_URL, WORKFLOW, addPagesDomain, addRecords, cnameOf, ensureProject, findZone, isApex, pagesDomain, pagesMemory, pointDns, removePagesDomain, verify, accountLabel } from "./cloudflare.mjs";
+import { TOKEN_URL, WORKFLOW, addPagesDomain, addRecords, cnameOf, ensureProject, findZone, isApex, pagesDomain, pagesMemory, CF_MEMORY, pointDns, removePagesDomain, verify, accountLabel } from "./cloudflare.mjs";
 import { provision, slug, spriteName } from "./provision.mjs";
 import { checkKey, deleteKey, ensureDomain, fqdn, getDomain, sendingKey, verifyDomain } from "./resend.mjs";
 
@@ -288,8 +288,22 @@ async function setupPages(id, ghToken, c) {
     console.error("pages", id, e.message);
     const perms = /Resource not accessible by integration/.test(e.message);
     const permsUrl = perms ? await installationPage(ghToken, load().find((x) => x.id === id)?.repo.split("/")[0] ?? "").catch(() => null) : null;
+    // Pages failed, but the agent still gets the owner's Cloudflare token (DNS and the rest).
+    const inst = load().find((x) => x.id === id);
+    if (inst && c) cfOnSprite(inst, c).catch((e) => console.error("cloudflare", id, e.message));
     set({ state: "error", detail: "", permsUrl, error: perms ? "Agent Keyboard needs new GitHub permissions (secrets, variables, workflows). Accept them on GitHub, then try again." : e.message });
   }
+}
+/** The owner's Cloudflare token on a Sprite (and a line in the agent's memory unless it already knows), then restart the bar. */
+async function cfOnSprite(inst, c) {
+  const lines = `CLOUDFLARE_API_TOKEN=${shq(open(c.token))}\nCLOUDFLARE_ACCOUNT_ID=${shq(c.accountId)}\n`;
+  await sprites(await mint(open(inst.assertion))).exec(inst.id, [
+    `{ grep -v -e '^CLOUDFLARE_API_TOKEN=' -e '^CLOUDFLARE_ACCOUNT_ID=' ~/ak.env || true; } > ~/ak.env.new`,
+    `printf %s ${shq(Buffer.from(lines).toString("base64"))} | base64 -d >> ~/ak.env.new`,
+    `chmod 600 ~/ak.env.new && mv ~/ak.env.new ~/ak.env`,
+    `mkdir -p ~/.claude && touch ~/.claude/CLAUDE.md && { grep -q CLOUDFLARE_API_TOKEN ~/.claude/CLAUDE.md || printf '\n%s\n' ${shq(CF_MEMORY)} >> ~/.claude/CLAUDE.md; }`,
+    `sprite-env services restart ak`,
+  ].join(" && "), { timeoutMs: 120e3 });
 }
 const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
@@ -837,6 +851,8 @@ const routes = {
     saveCfs();
     notify(s.email);
     const gu = ghUser(s.login);
+    // Sites already on Pages get the new token; the rest set up Pages (and get it even if that fails).
+    for (const i of load().filter((i) => i.email === s.email && i.pages?.state === "live")) cfOnSprite(i, cfs.get(s.email)).catch((e) => console.error("cloudflare", i.id, e.message));
     if (gu) for (const i of load().filter((i) => i.email === s.email && !["live", "setting up"].includes(i.pages?.state))) {
       upsert({ ...i, pages: { ...i.pages, state: "setting up", detail: "starting", error: null, permsUrl: null } });
       setupPages(i.id, gu.token, cfs.get(s.email));
