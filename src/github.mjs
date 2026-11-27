@@ -104,7 +104,9 @@ export async function addTag(token, fullName, tag, branch) {
   }
   if (!Object.keys(changes).length) {
     if (current) return { path: current, previous: null }; // already there
-    for (const path of ["index.html", "public/index.html", "site/index.html", "docs/index.html", "src/index.html"]) {
+    // The usual places first, then any other index.html (e.g. frontend/index.html), shallowest first.
+    const others = pages.map((p) => p.path).filter((p) => /(^|\/)index\.html$/i.test(p)).sort((a, b) => a.split("/").length - b.split("/").length);
+    for (const path of new Set(["index.html", "public/index.html", "site/index.html", "docs/index.html", "src/index.html", ...others])) {
       const html = await read(path);
       const i = html?.toLowerCase().lastIndexOf("</body>") ?? -1;
       if (i >= 0) { changes[path] = `${html.slice(0, i)}${tag}\n${html.slice(i)}`; break; }
