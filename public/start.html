@@ -156,8 +156,8 @@ function show(f) {
   } else if (f.step === "done") {
     const r = f.result;
     const pe = r.pagesError ? `<p class="err">Cloudflare Pages hosting didn't finish: ${esc(r.pagesError)} Retry it from the dashboard.</p>` : "";
-    const mv = r.previous ? `<p>This site already had Agent Keyboard at <b>${esc(new URL(r.previous.origin).host)}</b>. Bring its notes and memory over?</p><div class="row"><a class="btn ghost" href="/cloud/import/${esc(f.sprite)}" target="_blank" rel="opener">Bring them over</a><a class="btn ghost" href="/dashboard">Decide later on the dashboard</a></div>` : "";
-    $app.innerHTML = pe + mv + (r.starter || r.tagPath
+    const mv = r.previous ? `<p>This site already had Agent Keyboard at <b>${esc(new URL(r.previous.origin).host)}</b>. Bring its notes and memory over? Its bar stays on your site until you choose; then it switches to this one.</p><div class="row"><a class="btn ghost" href="/cloud/import/${esc(f.sprite)}" target="_blank" rel="opener">Bring them over</a><a class="btn ghost" href="/dashboard">Decide on the dashboard</a></div>` : "";
+    $app.innerHTML = pe + mv + (r.previous && !r.tagPath ? steps("done") : r.starter || r.tagPath
       ? `<p><b>Done.</b> Your site is live with the bar on it, at <a href="/cloud/open/${esc(f.sprite)}" target="_blank" rel="noopener">${esc(r.url)}</a>. Open it from here and you're already signed in to the bar: tap it and tell it what to build.</p>
          <div class="row"><a class="btn" href="/cloud/open/${esc(f.sprite)}" target="_blank" rel="noopener">Open your site</a><a class="btn ghost" href="/dashboard">Dashboard</a></div>${steps("done")}`
       : `<p><b>Done.</b> We couldn't find an <code>index.html</code> to add the bar to, so add this tag to your site's pages (before <code>&lt;/body&gt;</code>) and push. Once it's live, open your site from the dashboard and you're signed in to the bar.</p><pre>${esc(r.tag)}</pre>

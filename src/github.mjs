@@ -78,9 +78,10 @@ function previousOf(old) {
  * Put the bar's script tag on the site. Other Agent Keyboard bars (an older instance, or self-hosted)
  * are swapped for it on every .html page (and in code files that write the tag), keeping their data-* settings, so each page has one bar.
  * With none, it goes into the site's index.html before </body>. One commit. Returns { path: the first
- * page changed, previous: the replaced bar's { origin, siteId } or null }.
+ * page changed, previous: the replaced bar's { origin, siteId } or null }. With `hold`, a site that already has
+ * another bar is left as it is ({ path: null, previous }): it switches once its notes are brought over or skipped.
  */
-export async function addTag(token, fullName, tag, branch) {
+export async function addTag(token, fullName, tag, branch, hold) {
   branch ??= (await getRepo(token, fullName)).default_branch;
   const src = tag.match(/src="([^"]+)"/)[1];
   const read = async (path) => {
@@ -102,6 +103,7 @@ export async function addTag(token, fullName, tag, branch) {
     const next = html.replace(OLD_BAR, (old) => (old.includes(src) ? old : ((previous ??= previousOf(old)), mergeTag(tag, old))));
     if (next !== html) changes[path] = next;
   }
+  if (hold && previous) return { path: null, previous };
   if (!Object.keys(changes).length) {
     if (current) return { path: current, previous: null }; // already there
     // The usual places first, then any other index.html (e.g. frontend/index.html), shallowest first.

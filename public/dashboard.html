@@ -39,11 +39,14 @@ const LABEL = { restart: "Restarting…", update: "Updating… (about a minute)"
 // Spec 19: the site had an older bar. Offer to bring its notes and memory over (the old instance asks its owner to sign in once).
 const moved = (i) => {
   const p = i.previous, m = i.migrate ?? {}, host = p && new URL(p.origin).host;
-  if (!p || m.state === "skipped") return "";
+  if (!p) return "";
+  if (m.state === "skipped") return `<div class="meta">Started fresh. You can still <a href="/cloud/import/${esc(i.id)}" target="_blank" rel="opener">bring ${esc(host)}'s notes and memory over</a>.</div>`;
   if (m.state === "running") return `<div class="meta">Bringing notes and memory over from ${esc(host)}…</div>`;
   if (m.state === "done") return `<div class="meta">${esc(m.report)}</div>`;
-  return `<div class="meta">This site already had Agent Keyboard at <b>${esc(host)}</b>. Bring its notes and memory over?</div>${m.state === "error" ? `<p class="err">${esc(m.error)}</p>` : ""}<div class="row"><a class="btn ghost" href="/cloud/import/${esc(i.id)}" target="_blank" rel="opener">Bring them over</a><button class="btn ghost" data-a="import-skip">Start fresh</button></div>`;
+  return `<div class="meta">This site already had Agent Keyboard at <b>${esc(host)}</b>. Bring its notes and memory over? Its bar stays on your site until you choose.</div>${m.state === "error" ? `<p class="err">${esc(m.error)}</p>` : ""}<div class="row"><a class="btn ghost" href="/cloud/import/${esc(i.id)}" target="_blank" rel="opener">Bring them over</a><button class="btn ghost" data-a="import-skip">Start fresh</button></div>`;
 };
+// The older bar stays on the site until its notes are brought over or skipped; then the tag is swapped.
+const held = (i) => i.previous && !["done", "skipped"].includes(i.migrate?.state);
 let timer;
 
 // Teammates: people who can sign in to this site's bar. Inviting returns a single-use join link to send them.
@@ -165,11 +168,11 @@ async function render(note) {
       <div class="head"><h2>${bad ? `<span class="dot bad" title="${esc(i.status)}"></span>` : ""}<a href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar">${esc(host(i))}</a>${i.pages?.state === "live" && i.customDomain?.status === "active" ? ` ${unlink(i.customDomain.host)}` : ""}</h2></div>
       <div class="meta"><a href="https://github.com/${esc(i.repo)}" target="_blank" rel="noopener">${esc(i.repo)}</a></div>
       <div class="meta upd"><span>${behind === null ? "" : behind ? `Agent Keyboard update available · <button class="link" data-a="update">Update now</button>` : "Agent Keyboard is up to date"}</span><label class="auto" title="Installs each new Agent Keyboard release when no job is running">Auto-update<button class="switch" role="switch" aria-checked="${i.autoUpdate !== false}" data-a="autoupdate" aria-label="Auto-update"></button></label></div>
-      ${i.starter ? "" : i.tagPath ? "" : `<pre>${esc(i.tag)}</pre>`}
+      ${i.starter || i.tagPath || held(i) ? "" : `<pre>${esc(i.tag)}</pre>`}
       ${moved(i)}
       ${hosting(i, me)}
       ${i.status === "reconnect Fly" ? `<p class="err">Our access to your Fly account expired or was revoked. Delete and set up again to reconnect.</p>` : ""}
-      <div class="row actions">${!me.cloudflare || i.pages?.state === "live" || i.pages?.state === "setting up" ? "" : `<button class="btn ghost" data-a="pages">${i.pages?.state === "error" ? "Retry Cloudflare Pages" : "Host on Cloudflare Pages"}</button>`}${i.starter || i.tagPath ? "" : `<button class="btn ghost" data-a="tag" title="Commits the tag to your repo's index.html">Add the tag for me</button>`}</div>
+      <div class="row actions">${!me.cloudflare || i.pages?.state === "live" || i.pages?.state === "setting up" ? "" : `<button class="btn ghost" data-a="pages">${i.pages?.state === "error" ? "Retry Cloudflare Pages" : "Host on Cloudflare Pages"}</button>`}${i.starter || i.tagPath || held(i) ? "" : `<button class="btn ghost" data-a="tag" title="Commits the tag to your repo's index.html">Add the tag for me</button>`}</div>
       <div class="foot"><details class="more"><summary>Advanced</summary><div class="meta">Sprite <b>${esc(i.id)}</b> · ${esc(i.status)} · version ${esc(i.version ?? i.ref)} · since ${esc(i.createdAt.slice(0, 10))}${i.pages?.state === "live" ? " · Cloudflare Pages · sandboxes on" : ""}${i.tagPath ? ` · bar in ${esc(i.tagPath)}` : ""}</div>
         <div class="meta"><label class="auto perm" title="It can read your other sites' conversations and start one with their agents to ask for changes. Only on your messages, not teammates'.">Allow this agent to talk with your other sites' agents<button class="switch" role="switch" aria-checked="${!!i.mcp && i.mcp.talk !== false}" data-a="mcp-talk"></button></label></div>
         <div class="meta"><label class="auto perm" title="Restart, update or delete any of your sites, this one included, and manage their domains and teammates. It confirms destructive steps with you first.">Allow it to manage your Agent Keyboard sites, this one too<button class="switch" role="switch" aria-checked="${!!i.mcp?.manage}" data-a="mcp-manage"></button></label></div>${i.mail || (i.pages?.state === "live" && i.customDomain?.status === "active") ? mail(i, me) : ""}${team(i)}</details><div class="tools"><button class="btn ghost round" data-a="restart" title="Restart (only needed if the bar is stuck)" aria-label="Restart">${ICON.restart}</button><button class="btn ghost round danger" data-a="delete" title="Delete site" aria-label="Delete site"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/></svg></button></div><a class="btn primary" href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener">Open site</a></div>
@@ -289,7 +292,7 @@ async function render(note) {
     (b.closest(".row")?.querySelectorAll("button") ?? [b]).forEach((x) => (x.disabled = true));
     b.classList.remove("round"); // the progress label replaces the icon
     b.textContent = LABEL[a];
-    try { const r = await api(`instances/${id}/${a}`, {}); render(a === "delete" ? `Deleted ${id}.` : a === "domain-remove" ? "Removed the domain." : a === "email-remove" ? "Email is off." : a === "email" ? "Setting up email…" : a === "tag" ? `Added the tag to ${r.path}. Your host redeploys from that commit.` : a === "import-skip" ? "Starting fresh." : `${id}: ${a} done.`); }
+    try { const r = await api(`instances/${id}/${a}`, {}); render(a === "delete" ? `Deleted ${id}.` : a === "domain-remove" ? "Removed the domain." : a === "email-remove" ? "Email is off." : a === "email" ? "Setting up email…" : a === "tag" ? `Added the tag to ${r.path}. Your host redeploys from that commit.` : a === "import-skip" ? (r.path ? "Starting fresh. The bar on your site now points here; your host redeploys in a minute." : "Starting fresh.") : `${id}: ${a} done.`); }
     catch (e) { if (e.message === "Sign in with GitHub again") location.href = "/cloud/github/login?next=dashboard"; else render(e.message); }
   }));
 }

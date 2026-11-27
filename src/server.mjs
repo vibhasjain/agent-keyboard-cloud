@@ -234,7 +234,8 @@ async function runSite(flow) {
     (d) => (flow.detail = d),
   );
   // A brought site gets the tag committed to its index.html; if there isn't one, the page shows it to paste.
-  const { path: tagPath, previous } = r.starter ? { path: null, previous: null } : await addTag(user.token, r.repo, r.tag).catch(() => ({ path: null, previous: null }));
+  // One with an older bar keeps it until its notes are brought over or skipped (swapBar).
+  const { path: tagPath, previous } = r.starter ? { path: null, previous: null } : await addTag(user.token, r.repo, r.tag, undefined, true).catch(() => ({ path: null, previous: null }));
   upsert({ id: r.sprite, tagPath, previous, email: flow.email, login: flow.login, siteId: r.siteId, repo: r.repo, domain: r.domain, url: r.url, connection: r.connection, starter: r.starter, tag: r.tag, feedback: r.feedback, via: flow.via, ref: REF, createdAt: new Date().toISOString(), assertion: seal(flow.assertion) });
   flow.assertion = null;
   // Every site is hosted on Cloudflare Pages (connected before the flow starts).
@@ -456,6 +457,20 @@ async function sandboxHandoff(req, res) {
   return token ? send(res, 200, { token_hash: token }) : send(res, 502, { error: "couldn't mint a handoff token" });
 }
 // ---- spec 19: bring an older bar's notes, memory, settings and skills over ----
+/** Swap the older bar for this one, once its notes came over or the user started fresh. Returns the page changed, or null
+ *  (GitHub sign-in expired, or it failed: the dashboard then offers "Add the tag for me"). */
+async function swapBar(id) {
+  const inst = load().find((i) => i.id === id);
+  if (!inst || inst.tagPath || inst.starter) return null;
+  await fresh(inst.login);
+  const gu = ghUser(inst.login);
+  if (!gu) return null;
+  try {
+    const { path } = await addTag(gu.token, inst.repo, inst.tag);
+    upsert({ ...load().find((i) => i.id === id), tagPath: path });
+    return path;
+  } catch (e) { console.error("swap bar", id, e.message); return null; }
+}
 // The Sprite's own server pulls the bundle from the old instance (POST /sites/:id/import, internal secret, loopback).
 async function runImport(inst, auth) {
   const cur = () => load().find((x) => x.id === inst.id) ?? inst;
@@ -469,7 +484,8 @@ async function runImport(inst, auth) {
     const r = JSON.parse(lines.join("\n") || "{}");
     if (code !== 200) throw new Error(r.error ?? `import answered ${code}`);
     r.applied = await applyMoved(api, inst.id, r).catch((e) => (console.error("import apply", inst.id, e.message), null));
-    const report = importReport(r, inst.previous.origin);
+    const swapped = await swapBar(inst.id);
+    const report = importReport(r, inst.previous.origin) + (swapped ? " The bar on your site now points here; your host redeploys in a minute." : "");
     upsert({ ...cur(), migrate: { state: "done", result: r, report, at: new Date().toISOString() } });
     return { ...r, report };
   } catch (e) {
@@ -957,7 +973,7 @@ async function dispatch(req, res, u, s, b) {
       }
       if (m[2] === "import-skip") {
         upsert({ ...inst, migrate: { state: "skipped" } });
-        return send(res, 200, { ok: true });
+        return send(res, 200, { ok: true, path: await swapBar(inst.id) });
       }
       if (m[2] === "import") { // the notes-only fallback page, with the user's session on the old instance
         if (!inst.previous || typeof b?.bearer !== "string") return send(res, 400, { error: "Nothing to bring over" });
