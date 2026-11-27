@@ -408,9 +408,16 @@ async function feedbackReply(req, res) {
   const report = existsSync(`${DATA}/feedback.jsonl`) && readFileSync(`${DATA}/feedback.jsonl`, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((r) => r.id === f.id);
   const inst = report && load().find((i) => i.id === report.instance);
   if (!inst || typeof f.text !== "string" || !f.text.trim()) return send(res, 404, { error: "unknown report" });
-  const payload = Buffer.from(JSON.stringify({ text: f.text.slice(0, 5000), page: report.page || "/" })).toString("base64");
+  // Say whether this site already runs the fix, so its agent doesn't check too early.
+  latestCache.at = 0;
+  const version = await latest().catch(() => null);
+  const when = !version || inst.version === version ? "" : inst.autoUpdate === false
+    ? "\n\n(Your site isn't on this version yet and auto-update is off: update it from the dashboard to get the fix.)"
+    : "\n\n(Your site isn't on this version yet: auto-update installs it within the hour.)";
+  // Sent as a message, not a note, so the site's agent wakes up and answers. The stream is cut after 20 s (curl exit 28); the job keeps running.
+  const payload = Buffer.from(JSON.stringify({ text: f.text.slice(0, 5000) + when, page: report.page || "/", sender: "Agent Keyboard" })).toString("base64");
   const api = sprites(await mint(open(inst.assertion)));
-  const { out } = await api.exec(inst.id, `. ~/ak.env; printf %s ${shq(payload)} | base64 -d | curl -sS -X POST "http://127.0.0.1:$PORT/sites/${inst.siteId}/feedback-update" -H "x-ak-internal: $AK_INTERNAL_SECRET" -H 'Content-Type: application/json' --data-binary @- -w '\n%{http_code}'`, { timeoutMs: 60e3 });
+  const { out } = await api.exec(inst.id, `. ~/ak.env; printf %s ${shq(payload)} | base64 -d | curl -sS -N --max-time 20 -o /dev/null -X POST "http://127.0.0.1:$PORT/sites/${inst.siteId}/messages" -H "x-ak-internal: $AK_INTERNAL_SECRET" -H 'Content-Type: application/json' --data-binary @- -w '\n%{http_code}'; true`, { timeoutMs: 60e3 });
   const code = Number(out.trim().split("\n").pop());
   appendFileSync(`${DATA}/feedback.jsonl`, JSON.stringify({ reply: f.id, at: new Date().toISOString(), text: f.text.slice(0, 5000), code }) + "\n", { mode: 0o600 });
   send(res, code === 200 ? 200 : 502, code === 200 ? { ok: true } : { error: `the site answered ${code}` });
