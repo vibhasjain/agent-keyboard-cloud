@@ -62,6 +62,7 @@ ${tag}
  *   supabase: { url, anonKey, serviceKey },
  *   ref?,                  // agent-keyboard git ref to install (default "main")
  *   connector?,            // the Sprites connector for Anthropic (default: the custom_api one for api.anthropic.com)
+ *   claudeEnv?,            // instead of a connector: the Claude env for Agent Keyboard's Claude (spec 27)
  * }
  * progress(step) is called before each step. Returns { sprite, url, siteId, repo, tag, starter }.
  */
@@ -81,13 +82,16 @@ export async function provision(opts, progress = () => {}) {
   const siteId = slug(repo ? repo.name : opts.name ?? "my-site");
   const name = spriteName(siteId);
 
-  progress("claude: finding the connector");
-  const conns = await api.connections();
-  const conn = opts.connector
-    ? conns.find((c) => c.id === opts.connector)
-    : conns.find((c) => c.provider === "custom_api" && c.provider_info?.base_api_url === "https://api.anthropic.com");
-  if (!conn) throw new Error("no Anthropic connector in this Fly account (custom_api for https://api.anthropic.com)");
-  if (!name.startsWith(conn.access_policy?.name_prefix ?? "\0")) await api.setPolicy(conn.id, "ak-");
+  let conn = null;
+  if (!opts.claudeEnv) {
+    progress("claude: finding the connector");
+    const conns = await api.connections();
+    conn = opts.connector
+      ? conns.find((c) => c.id === opts.connector)
+      : conns.find((c) => c.provider === "custom_api" && c.provider_info?.base_api_url === "https://api.anthropic.com");
+    if (!conn) throw new Error("no Anthropic connector in this Fly account (custom_api for https://api.anthropic.com)");
+    if (!name.startsWith(conn.access_policy?.name_prefix ?? "\0")) await api.setPolicy(conn.id, "ak-");
+  }
 
   progress(`sprite: creating ${name}`);
   const url = await ensureSprite(api, name);
@@ -121,8 +125,10 @@ export async function provision(opts, progress = () => {}) {
     AK_RECOVER_URL: "https://agentkeyboard.com/dashboard", // the bar's "forgot password?"
     AK_INTERNAL_SECRET: randomBytes(24).toString("hex"),
     AK_FEEDBACK_KEY: feedbackKey, // spec 23: lets its agent send us bug reports (we store only the hash)
-    ANTHROPIC_BASE_URL: `https://api.sprites.dev/v1/gateway/custom_api/${conn.id}`,
-    CLAUDE_CODE_OAUTH_TOKEN: "placeholder", // the connector swaps in the real token
+    ...(opts.claudeEnv ?? {
+      ANTHROPIC_BASE_URL: `https://api.sprites.dev/v1/gateway/custom_api/${conn.id}`,
+      CLAUDE_CODE_OAUTH_TOKEN: "placeholder", // the connector swaps in the real token
+    }),
     // A blank repo is hosted on the Sprite for now; let the bar work once its own domain points here.
     ...(blank && opts.domain ? { EXTRA_ORIGINS: `https://${opts.domain},https://www.${opts.domain}` } : {}),
   };
@@ -150,7 +156,7 @@ export async function provision(opts, progress = () => {}) {
   progress("bar: sign-in account");
   await ensureBarUser(supabase, email);
 
-  return { sprite: name, url, siteId, repo: repo.full_name, domain, connection: conn.id, tag: scriptTag(url, siteId), starter, feedback: createHash("sha256").update(feedbackKey).digest("hex") };
+  return { sprite: name, url, siteId, repo: repo.full_name, domain, connection: conn?.id ?? null, tag: scriptTag(url, siteId), starter, feedback: createHash("sha256").update(feedbackKey).digest("hex") };
 }
 
 /** The bar signs in against our Supabase: create the account (confirmed, no email: sign-in is by handoff link) unless it exists. */

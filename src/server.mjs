@@ -16,6 +16,7 @@ import { mcp } from "./mcp.mjs";
 import { addTag, getRepo, putSecret, putVariable, removeDeploySetup, writeFile } from "./github.mjs";
 import { TOKEN_URL, WORKFLOW, addPagesDomain, addRecords, cnameOf, deleteProject, ensureProject, findZone, isApex, pagesDomain, pagesMemory, CF_MEMORY, pointDns, removePagesDomain, verify, accountLabel } from "./cloudflare.mjs";
 import { provision, slug, spriteName } from "./provision.mjs";
+import { DAILY, FREE, MIN, TOPUPS, checkout, forward, stripeEvent } from "./billing.mjs";
 import { checkKey, deleteKey, ensureDomain, fqdn, getDomain, sendingKey, verifyDomain } from "./resend.mjs";
 
 const env = process.env;
@@ -24,6 +25,8 @@ const BASE = (env.PUBLIC_URL ?? `http://localhost:${env.PORT ?? 8787}`).replace(
 const KEY = Buffer.from(env.CLOUD_KEY ?? "", "hex");
 if (KEY.length !== 32) throw new Error("CLOUD_KEY must be 64 hex chars");
 const REF = env.AK_REF ?? "main";
+// Spec 27: "Agent Keyboard's Claude" (our API key, prepaid credit on Stripe) is offered only once all three are set.
+const PAID = !!(env.ANTHROPIC_API_KEY && env.STRIPE_SECRET_KEY && env.STRIPE_WEBHOOK_SECRET);
 const supabase = { url: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY, serviceKey: env.SUPABASE_SERVICE_KEY };
 mkdirSync(DATA, { recursive: true });
 loadApp(DATA);
@@ -128,10 +131,60 @@ function step(flow, s, extra = {}) {
 const ACCT = `${DATA}/accounts.json`;
 let accts;
 try { accts = new Map(Object.entries(existsSync(ACCT) ? JSON.parse(open(readFileSync(ACCT, "utf8"))) : {})); } catch { accts = new Map(); }
-const setAcct = (email, v) => { accts.set(email, { ...accts.get(email), ...v }); writeFileSync(ACCT, seal(JSON.stringify(Object.fromEntries(accts))), { mode: 0o600 }); notify(email); };
+const writeAccts = () => writeFileSync(ACCT, seal(JSON.stringify(Object.fromEntries(accts))), { mode: 0o600 });
+const setAcct = (email, v) => { accts.set(email, { ...accts.get(email), ...v }); writeAccts(); notify(email); };
 const newest = (email) => load().filter((i) => i.email === email).sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""))[0];
 const flyOf = (email) => accts.get(email)?.assertion ?? (newest(email) && open(newest(email).assertion));
-const claudeOf = (email) => accts.get(email)?.claude ?? newest(email)?.connection;
+const claudeOf = (email) => accts.get(email)?.claude ?? newest(email)?.connection; // "ak": Agent Keyboard's Claude (spec 27)
+
+// ---- spec 27: Agent Keyboard's Claude. A paid site's agent reaches our metering proxy (direct to Fly: no proxy timeout
+// mid-stream) with a per-site token in CLAUDE_CODE_OAUTH_TOKEN (the bar's server strips ANTHROPIC_API_KEY); we keep its hash. ----
+const PROXY = `${env.FLY_APP_NAME ? `https://${env.FLY_APP_NAME}.fly.dev` : BASE}/cloud/anthropic`;
+const aiToken = () => `sk-ant-ak-${randomBytes(24).toString("hex")}`;
+const oursEnv = (token) => ({ ANTHROPIC_BASE_URL: PROXY, CLAUDE_CODE_OAUTH_TOKEN: token, ANTHROPIC_MODEL: "sonnet" });
+const byocEnv = (conn) => ({ ANTHROPIC_BASE_URL: `https://api.sprites.dev/v1/gateway/custom_api/${conn}`, CLAUDE_CODE_OAUTH_TOKEN: "placeholder" });
+// Rewrite a Sprite's Claude lines in ~/ak.env and restart its bar.
+const setClaudeEnv = (api, id, vars) => api.exec(id, [
+  `grep -v -E '^(ANTHROPIC_BASE_URL|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_MODEL)=' ~/ak.env > ~/ak.env.new`,
+  `printf %s ${shq(Buffer.from(Object.entries(vars).map(([k, v]) => `${k}=${shq(v)}\n`).join("")).toString("base64"))} | base64 -d >> ~/ak.env.new`,
+  `chmod 600 ~/ak.env.new && mv ~/ak.env.new ~/ak.env`,
+  `sprite-env services restart ak`,
+].join(" && "), { timeoutMs: 120e3 });
+// First switch to ours: the free credit.
+const useOurs = (email) => { const a = accts.get(email) ?? {}; setAcct(email, { claude: "ak", ...(a.freeGiven ? {} : { freeGiven: true, credit: (a.credit ?? 0) + FREE }) }); };
+function charge(email, c) {
+  const a = accts.get(email) ?? {}, now = new Date().toISOString(), d = now.slice(0, 10), m = now.slice(0, 7);
+  accts.set(email, { ...a, credit: (a.credit ?? 0) - c, day: { d, spent: (a.day?.d === d ? a.day.spent : 0) + c }, month: { m, spent: (a.month?.m === m ? a.month.spent : 0) + c } });
+  writeAccts(); // no notify: the dashboard would redraw on every request
+}
+const apiErr = (type, message) => ({ type: "error", error: { type, message } });
+// Claude Code calls HEAD /api/hello, then /v1/messages (and count_tokens). A 402 isn't retried and reaches the bar as written.
+async function anthropicProxy(req, res, u) {
+  const path = u.pathname.slice("/cloud/anthropic".length) + u.search;
+  if (req.method === "HEAD" || (req.method === "GET" && path.startsWith("/api/hello"))) return send(res, 200, {});
+  if (req.method !== "POST" || !/^\/v1\/messages(\/count_tokens)?(\?|$)/.test(path)) return send(res, 404, apiErr("not_found_error", "not found"));
+  const tok = String(req.headers.authorization ?? "").replace(/^Bearer\s+/i, "") || String(req.headers["x-api-key"] ?? "");
+  const inst = PAID && tok && load().find((i) => i.aiKey && i.aiKey === sha(tok)), a = inst && accts.get(inst.email);
+  if (!a || a.claude !== "ak") return send(res, 401, apiErr("authentication_error", `This site isn't on Agent Keyboard's Claude. Reconnect Claude at ${BASE}/dashboard`));
+  if ((a.credit ?? 0) < MIN) return send(res, 402, apiErr("billing_error", `Out of Agent Keyboard credit ($${Math.max(0, (a.credit ?? 0) / 1e6).toFixed(2)} left). Top up at ${BASE}/dashboard`));
+  if (a.day?.d === new Date().toISOString().slice(0, 10) && a.day.spent >= DAILY) return send(res, 402, apiErr("billing_error", `Today's $${DAILY / 1e6} limit on Agent Keyboard's Claude is used up. It resets at midnight UTC, or switch to your own Claude at ${BASE}/dashboard`));
+  const c = await forward(req, res, path, env.ANTHROPIC_API_KEY);
+  if (c) charge(inst.email, c);
+}
+// Stripe's checkout.session.completed adds the credit, once per session.
+async function stripeWebhook(req, res) {
+  let raw = "";
+  for await (const c of req) if ((raw += c).length > 1e6) return send(res, 413, { error: "too large" });
+  const ev = env.STRIPE_WEBHOOK_SECRET && stripeEvent(env.STRIPE_WEBHOOK_SECRET, raw, String(req.headers["stripe-signature"] ?? ""));
+  if (!ev) return send(res, 400, { error: "bad signature" });
+  const o = ev.data?.object ?? {}, email = o.metadata?.email;
+  if (ev.type === "checkout.session.completed" && o.payment_status === "paid" && email && !(accts.get(email)?.paid ?? []).includes(o.id)) {
+    const a = accts.get(email) ?? {};
+    setAcct(email, { credit: (a.credit ?? 0) + o.amount_total * 1e4, paid: [...(a.paid ?? []).slice(-99), o.id] });
+    console.log("topup", email, o.amount_total);
+  }
+  send(res, 200, { received: true });
+}
 const LOGIN = "ak-claude-signin"; // a short-lived Sprite the Claude sign-in runs on, deleted after
 
 // The start flow: Fly (once), Claude (once), then the site if one was picked; with none it ends at "ready".
@@ -150,6 +203,7 @@ async function runFly(flow) {
     flow.assertion = creds.identity_assertion ?? known;
     if (flow.assertion !== accts.get(flow.email)?.assertion) setAcct(flow.email, { assertion: flow.assertion });
     const api = sprites(creds), conn = claudeOf(flow.email);
+    if (conn === "ak") return await runSite(flow);
     if (conn && (await api.connections()).some((c) => c.id === conn)) {
       if (conn !== accts.get(flow.email)?.claude) setAcct(flow.email, { claude: conn });
       return await runSite(flow);
@@ -183,25 +237,36 @@ async function claudeSwitch(email, code) {
       try {
         const sapi = sprites(await mint(open(i.assertion)));
         if (!(await sapi.connections()).some((c) => c.id === conn)) throw new Error("on another Fly account");
-        const line = `ANTHROPIC_BASE_URL=${shq(`https://api.sprites.dev/v1/gateway/custom_api/${conn}`)}\n`;
-        await sapi.exec(i.id, [
-          `grep -v '^ANTHROPIC_BASE_URL=' ~/ak.env > ~/ak.env.new`,
-          `printf %s ${shq(Buffer.from(line).toString("base64"))} | base64 -d >> ~/ak.env.new`,
-          `chmod 600 ~/ak.env.new && mv ~/ak.env.new ~/ak.env`,
-          `sprite-env services restart ak`,
-        ].join(" && "), { timeoutMs: 120e3 });
-        upsert({ ...(load().find((x) => x.id === i.id) ?? i), connection: conn });
+        await setClaudeEnv(sapi, i.id, byocEnv(conn));
+        upsert({ ...(load().find((x) => x.id === i.id) ?? i), connection: conn, aiKey: undefined });
       } catch (e) {
         console.error("claude switch", i.id, e.message);
         failed.push(i.id);
       }
     }
     setAcct(email, { claude: conn });
-    if (old && old !== conn && !failed.length) await api.removeConnection(old).catch((e) => (e.status === 404 ? null : console.error("remove connector", e.message)));
+    if (old && old !== "ak" && old !== conn && !failed.length) await api.removeConnection(old).catch((e) => (e.status === 404 ? null : console.error("remove connector", e.message)));
     Object.assign(st, { step: "done", failed });
   } catch (e) {
     Object.assign(st, { step: "error", error: e.message });
   }
+}
+
+// Switch every site to Agent Keyboard's Claude: a new proxy token each, then restart. The connector stays for switching back.
+async function oursSwitch(email) {
+  const st = switches.get(email), failed = [];
+  useOurs(email);
+  for (const i of load().filter((i) => i.email === email)) {
+    try {
+      const token = aiToken();
+      await setClaudeEnv(sprites(await mint(open(i.assertion))), i.id, oursEnv(token));
+      upsert({ ...(load().find((x) => x.id === i.id) ?? i), aiKey: sha(token) });
+    } catch (e) {
+      console.error("ours switch", i.id, e.message);
+      failed.push(i.id);
+    }
+  }
+  Object.assign(st, { step: "done", failed });
 }
 
 async function runClaude(flow, code) {
@@ -230,14 +295,15 @@ async function runSite(flow) {
   const version = await latest().catch(() => null); // what REF holds now = what this install gets, so a new site isn't "behind"
   const user = ghUser(flow.login);
   if (!user) throw new Error("Your GitHub sign-in expired. Sign in again.");
+  const ours = claudeOf(flow.email) === "ak", token = ours ? aiToken() : null;
   const r = await provision(
-    { assertion: flow.assertion, email: flow.email, repo: flow.repo, domain: flow.domain, name: flow.name, ref: REF, githubToken: user.token, supabase, connector: claudeOf(flow.email) },
+    { assertion: flow.assertion, email: flow.email, repo: flow.repo, domain: flow.domain, name: flow.name, ref: REF, githubToken: user.token, supabase, ...(ours ? { claudeEnv: oursEnv(token) } : { connector: claudeOf(flow.email) }) },
     (d) => (flow.detail = d),
   );
   // A brought site gets the tag committed to its index.html; if there isn't one, the page shows it to paste.
   // One with an older bar keeps it until its notes are brought over or skipped (swapBar).
   const { path: tagPath, previous } = r.starter ? { path: null, previous: null } : await addTag(user.token, r.repo, r.tag, undefined, true).catch(() => ({ path: null, previous: null }));
-  upsert({ id: r.sprite, tagPath, previous, email: flow.email, login: flow.login, siteId: r.siteId, repo: r.repo, domain: r.domain, url: r.url, connection: r.connection, starter: r.starter, tag: r.tag, feedback: r.feedback, via: flow.via, ref: REF, version, createdAt: new Date().toISOString(), assertion: seal(flow.assertion) });
+  upsert({ id: r.sprite, tagPath, previous, email: flow.email, login: flow.login, siteId: r.siteId, repo: r.repo, domain: r.domain, url: r.url, connection: r.connection, starter: r.starter, tag: r.tag, feedback: r.feedback, via: flow.via, ref: REF, version, ...(ours ? { aiKey: sha(token) } : {}), createdAt: new Date().toISOString(), assertion: seal(flow.assertion) });
   flow.assertion = null;
   // Every site is hosted on Cloudflare Pages (connected before the flow starts).
   flow.detail = "hosting your site on Cloudflare Pages";
@@ -873,7 +939,7 @@ const routes = {
   "GET /cloud/me": (q, req, res, s) => {
     if (!s) return send(res, 200, { signedIn: false, app: appReady() });
     const inst = load().find((i) => i.email === s.email);
-    send(res, 200, { signedIn: true, login: s.login, email: s.email, github: !!ghUser(s.login), installUrl: appReady() ? installUrl("start") : null, instance: inst && pub(inst), claudeAccount: !!claudeOf(s.email), cloudflare: accountLabel(cfs.get(s.email)?.accountName), resend: resends.get(s.email)?.label ?? null, fly: !!flyOf(s.email), claudeSignIn: !!claudeOf(s.email), cloudflareTokenUrl: TOKEN_URL, claude: mcpServer.claude(s.login), events: eventsUrl(s.email), flow: flowView(flows.get(s.email)) });
+    send(res, 200, { signedIn: true, login: s.login, email: s.email, github: !!ghUser(s.login), installUrl: appReady() ? installUrl("start") : null, instance: inst && pub(inst), claudeAccount: !!claudeOf(s.email), cloudflare: accountLabel(cfs.get(s.email)?.accountName), resend: resends.get(s.email)?.label ?? null, fly: !!flyOf(s.email), claudeSignIn: !!claudeOf(s.email), cloudflareTokenUrl: TOKEN_URL, claude: mcpServer.claude(s.login), billing: PAID ? { ours: claudeOf(s.email) === "ak", credit: accts.get(s.email)?.credit ?? 0, month: accts.get(s.email)?.month?.m === new Date().toISOString().slice(0, 7) ? accts.get(s.email).month.spent : 0, free: !accts.get(s.email)?.freeGiven && FREE, topups: TOPUPS } : null, events: eventsUrl(s.email), flow: flowView(flows.get(s.email)) });
   },
   "GET /cloud/repos": async (q, req, res, s) => {
     const u = s && ghUser(s.login);
@@ -918,6 +984,29 @@ const routes = {
     runClaude(f, String(b.code).trim());
     step(f, "connector", { detail: "signing in to Claude" });
     send(res, 200, flowView(f));
+  },
+
+  // Spec 27: choose Agent Keyboard's Claude, at setup's Claude step or from the dashboard (every site switches).
+  "POST /cloud/claude/ours": async (q, req, res, s) => {
+    if (!s) return send(res, 401, { error: "Sign in" });
+    if (!PAID) return send(res, 400, { error: "Agent Keyboard's Claude isn't available yet" });
+    const f = flows.get(s.email);
+    if (f?.step === "claude") {
+      useOurs(s.email);
+      f.loginUrl = null;
+      mint(f.assertion).then((c) => sprites(c).remove(LOGIN)).catch(() => {});
+      runSite(f).catch((e) => step(f, "error", { error: e.message }));
+      return send(res, 200, flowView(f));
+    }
+    if (switches.get(s.email)?.step === "switching") return send(res, 409, { error: "Already switching" });
+    switches.set(s.email, { step: "switching" });
+    oursSwitch(s.email).catch((e) => Object.assign(switches.get(s.email), { step: "error", error: e.message }));
+    send(res, 200, switches.get(s.email));
+  },
+  "POST /cloud/billing/topup": async (q, req, res, s, b) => {
+    if (!s) return send(res, 401, { error: "Sign in" });
+    if (!PAID || !TOPUPS.includes(b.usd)) return send(res, 400, { error: "Pick a top-up amount" });
+    send(res, 200, { url: await checkout(env.STRIPE_SECRET_KEY, s.email, b.usd, `${BASE}/dashboard`) });
   },
 
   // Connect Cloudflare once (spec #13): verify the pasted token and keep it sealed for this user's instances.
@@ -1151,6 +1240,8 @@ createServer(async (req, res) => {
   try {
     if (s) await fresh(s.login);
     if (await mcpServer(req, res, u, s)) return;
+    if (u.pathname.startsWith("/cloud/anthropic/")) return await anthropicProxy(req, res, u);
+    if (req.method === "POST" && u.pathname === "/cloud/stripe/webhook") return await stripeWebhook(req, res);
     if (req.method === "POST" && u.pathname === "/cloud/feedback") return await feedback(req, res); // its own 20 KB body cap
     if (req.method === "POST" && u.pathname === "/cloud/wake-at") return await wakeAt(req, res);
     if (req.method === "POST" && u.pathname === "/cloud/feedback-reply") return await feedbackReply(req, res);

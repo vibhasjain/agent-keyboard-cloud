@@ -43,10 +43,12 @@ const order = { cloudflare: 0, fly: 1, claude: 2, connector: 2, site: 3, ready: 
 const steps = (s) => `<ol class="steps">${STEPS.map(([k, t], i) => `<li class="${i < order[s] || s === "done" ? "ok" : i === order[s] ? "now" : ""}">${t}</li>`).join("")}</ol>`;
 let timer, lastStep, copied = "";
 
+let billing = null; // spec 27: set when Agent Keyboard's Claude is offered
 async function render() {
   clearTimeout(timer);
   let me;
   try { me = await api("me"); } catch (e) { $app.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  billing = me.billing;
   // Signed in: their GitHub avatar opens the account menu (as on the dashboard), with Your sites for returning users.
   if (me.signedIn && !document.querySelector(".acct-menu")) {
     document.querySelector(".top").insertAdjacentHTML("beforeend", `<details class="acct-menu"><summary aria-label="Account: ${esc(me.login)}"><span aria-hidden="true">${esc(me.login.slice(0, 1).toUpperCase())}</span><img src="https://github.com/${encodeURIComponent(me.login)}.png?size=64" alt="" onerror="this.remove()"></summary><div><span>Signed in as ${esc(me.login)}</span>${me.instance ? `<a href="/dashboard"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>Your sites</a>` : ""}<button type="button" id="out"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>Sign out</button>${me.instance ? "" : `<button type="button" id="del"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>Delete account</button>`}</div></details>`);
@@ -142,7 +144,14 @@ function show(f) {
       ${f.error ? `<p class="err">${esc(f.error)}</p>` : ""}
       ${f.loginUrl ? `<a class="btn" href="${esc(f.loginUrl)}" target="_blank" rel="noopener">Sign in to Claude</a>
       <form id="c"><label for="code">Code from Claude</label><input id="code" type="password" autocomplete="off" spellcheck="false" required><div class="row"><button class="btn">Continue</button></div></form>` : `<p>Getting a sign-in link…</p>`}
+      ${billing ? `<div class="card"><p><b>No Claude subscription?</b> Use Agent Keyboard's Claude and pay as you go: ${billing.free ? `$${billing.free / 1e6} of free credit to start, then ` : ""}top up from $${billing.topups[0]}. It suits a few edits a month; if you edit a lot, a Claude Pro plan works out cheaper. You can switch either way later on the dashboard.</p><div class="row"><button class="btn ghost" id="ours">Use Agent Keyboard's Claude</button></div></div>` : ""}
       ${steps(f.step)}`;
+    const ours = document.getElementById("ours");
+    if (ours) ours.onclick = async () => {
+      ours.disabled = true;
+      try { show(await api("claude/ours", {})); }
+      catch (err) { ours.insertAdjacentHTML("afterend", `<p class="err">${esc(err.message)}</p>`); ours.disabled = false; }
+    };
     const form = document.getElementById("c");
     if (form) {
       form.onsubmit = async (e) => {

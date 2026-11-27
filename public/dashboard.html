@@ -101,6 +101,7 @@ function mail(i, me) {
     : `<p class="err">${keyLink(m.error)}</p>`;
   return `<div class="meta"><label class="auto perm" title="The bar emails teammates you @mention, and this site's agent can send email for the site (a contact form, say).">Allow it to send email from ${esc(host)}<button class="switch" role="switch" aria-checked="${!!m && m.status !== "error"}" data-a="email-toggle" data-set="${!!m}"${m?.status === "setting up" ? " disabled" : ""}></button></label></div>${status}<div class="rsslot"></div>`;
 }
+const usd = (micro) => (Math.max(0, micro) / 1e6).toFixed(2);
 // Resend's key errors name resend.com/api-keys: make it a link.
 const keyLink = (s) => esc(s).replace("resend.com/api-keys", `<a href="https://resend.com/api-keys" target="_blank" rel="noopener">resend.com/api-keys</a>`);
 // Connect Resend: the same guided steps as Cloudflare. Resend has no pre-filled key form, so step 2 spells it out.
@@ -179,7 +180,8 @@ async function render(note) {
         <div class="meta"><label class="auto perm" title="It can read your other sites' conversations and start one with their agents to ask for changes. Only on your messages, not teammates'.">Allow this agent to talk with your other sites' agents<button class="switch" role="switch" aria-checked="${!!i.mcp && i.mcp.talk !== false}" data-a="mcp-talk"></button></label></div>
         <div class="meta"><label class="auto perm" title="Restart, update or delete any of your sites, this one included, and manage their domains and teammates. It confirms destructive steps with you first.">Allow it to manage your Agent Keyboard sites, this one too<button class="switch" role="switch" aria-checked="${!!i.mcp?.manage}" data-a="mcp-manage"></button></label></div>${i.mail || (i.pages?.state === "live" && i.customDomain?.status === "active") ? mail(i, me) : ""}${team(i)}</details><div class="tools"><button class="btn ghost round" data-a="restart" title="Restart (only needed if the bar is stuck)" aria-label="Restart">${ICON.restart}</button><button class="btn ghost round danger" data-a="delete" title="Delete site" aria-label="Delete site"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/></svg></button></div><a class="btn primary" href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener">Open site</a></div>
     </div>`;
-  }).join("") + (list.length ? `<p class="small hint">Bar not showing? Open from here to enable.</p>` : "") + `${me.cloudflare ? `<p class="small acct">Cloudflare: connected (${esc(me.cloudflare)})<span><a href="#" id="cfre">Use a different token</a> · <a href="#" id="cfx">Disconnect</a></span></p>` : ""}${me.resend ? `<p class="small acct">Resend: connected (${esc(me.resend)})<span><a href="#" id="rsre">Use a different key</a> · <a href="#" id="rsx-acct">Disconnect</a></span></p>` : ""}${me.claudeAccount ? `<p class="small acct">Claude: connected<span><a href="#" id="clre">Reconnect Claude</a></span></p>` : ""}<div id="cfslot"></div>`;
+  }).join("") + (list.length ? `<p class="small hint">Bar not showing? Open from here to enable.</p>` : "") + `${me.cloudflare ? `<p class="small acct">Cloudflare: connected (${esc(me.cloudflare)})<span><a href="#" id="cfre">Use a different token</a> · <a href="#" id="cfx">Disconnect</a></span></p>` : ""}${me.resend ? `<p class="small acct">Resend: connected (${esc(me.resend)})<span><a href="#" id="rsre">Use a different key</a> · <a href="#" id="rsx-acct">Disconnect</a></span></p>` : ""}${me.billing?.ours ? `<p class="small acct">Claude: Agent Keyboard's, pay as you go ($${usd(me.billing.credit)} credit · $${usd(me.billing.month)} used this month)<span>Top up ${me.billing.topups.map((n) => `<a href="#" class="topup" data-usd="${n}">$${n}</a>`).join(" ")} · <a href="#" id="clre">Switch to my Claude</a></span></p>`
+      : me.claudeAccount ? `<p class="small acct">Claude: connected<span><a href="#" id="clre">Reconnect Claude</a>${me.billing ? ` · <a href="#" id="clours" title="Pay as you go on our Claude: no subscription needed">Use Agent Keyboard's Claude</a>` : ""}</span></p>` : ""}<div id="cfslot"></div>`;
   for (const id of advanced()) $app.querySelector(`.inst[data-adv="${CSS.escape(id)}"] details.more`)?.setAttribute("open", "");
   clearTimeout(timer);
   if (list.some((i) => i.pages?.state === "setting up" || i.mail?.status === "setting up")) timer = setTimeout(() => render(note), 3000);
@@ -255,6 +257,16 @@ async function render(note) {
   });
   disconnect("cfx", "cloudflare/remove", "Disconnect Cloudflare? We delete our copy of your token. Sites already on Cloudflare Pages keep deploying with the copy in each repo's GitHub secrets; revoke the token on Cloudflare to stop those too.");
   disconnect("rsx-acct", "resend/remove", "Disconnect Resend? We delete our copy of your key. Each site keeps its own sending-only key; delete those on Resend to stop its email.");
+  // Spec 27: switch every site to Agent Keyboard's Claude (the same progress card as Reconnect), and top up on Stripe.
+  document.getElementById("clours")?.addEventListener("click", async (e) => {
+    e.preventDefault();
+    if (!confirm(`Switch all your sites to Agent Keyboard's Claude? You pay as you go from prepaid credit${me.billing.free ? ` ($${me.billing.free / 1e6} free to start)` : ""}. Each site restarts once, which stops any job running on it. Switch back any time.`)) return;
+    try { await api("claude/ours", {}); claudeSwitch(); } catch (err) { alert(err.message); }
+  });
+  document.querySelectorAll(".topup").forEach((a) => a.addEventListener("click", async (e) => {
+    e.preventDefault();
+    try { location.href = (await api("billing/topup", { usd: Number(a.dataset.usd) })).url; } catch (err) { alert(err.message); }
+  }));
   document.getElementById("clre")?.addEventListener("click", (e) => {
     e.preventDefault();
     claudeSwitch(true);
