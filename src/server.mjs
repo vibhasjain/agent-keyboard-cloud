@@ -227,6 +227,7 @@ async function runClaude(flow, code) {
 async function runSite(flow) {
   if (!flow.sprite) return step(flow, "ready");
   step(flow, "install");
+  const version = await latest().catch(() => null); // what REF holds now = what this install gets, so a new site isn't "behind"
   const user = ghUser(flow.login);
   if (!user) throw new Error("Your GitHub sign-in expired. Sign in again.");
   const r = await provision(
@@ -236,7 +237,7 @@ async function runSite(flow) {
   // A brought site gets the tag committed to its index.html; if there isn't one, the page shows it to paste.
   // One with an older bar keeps it until its notes are brought over or skipped (swapBar).
   const { path: tagPath, previous } = r.starter ? { path: null, previous: null } : await addTag(user.token, r.repo, r.tag, undefined, true).catch(() => ({ path: null, previous: null }));
-  upsert({ id: r.sprite, tagPath, previous, email: flow.email, login: flow.login, siteId: r.siteId, repo: r.repo, domain: r.domain, url: r.url, connection: r.connection, starter: r.starter, tag: r.tag, feedback: r.feedback, via: flow.via, ref: REF, createdAt: new Date().toISOString(), assertion: seal(flow.assertion) });
+  upsert({ id: r.sprite, tagPath, previous, email: flow.email, login: flow.login, siteId: r.siteId, repo: r.repo, domain: r.domain, url: r.url, connection: r.connection, starter: r.starter, tag: r.tag, feedback: r.feedback, via: flow.via, ref: REF, version, createdAt: new Date().toISOString(), assertion: seal(flow.assertion) });
   flow.assertion = null;
   // Every site is hosted on Cloudflare Pages (connected before the flow starts).
   flow.detail = "hosting your site on Cloudflare Pages";
