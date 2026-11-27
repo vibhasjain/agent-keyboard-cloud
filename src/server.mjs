@@ -273,10 +273,10 @@ async function setupPages(id, ghToken, c) {
     sites[0].branch = live; // the bar commits to the live branch (older sites were staged on ak-staging)
     sites[0].sandbox = { preview: `https://{branch}.${p.subdomain}` };
     const extra = [...new Set([...had.split(",").filter(Boolean), `https://${p.subdomain}`])].join(",");
-    const lines = `SITES=${shq(JSON.stringify(sites))}\nEXTRA_ORIGINS=${shq(extra)}\nCLOUDFLARE_API_TOKEN=${shq(token)}\nCLOUDFLARE_ACCOUNT_ID=${shq(c.accountId)}\n`;
+    const lines = `SITES=${shq(JSON.stringify(sites))}\nEXTRA_ORIGINS=${shq(extra)}\nAK_LIVE_URL=${shq(inst.customDomain?.host ? `https://${inst.customDomain.host}` : `https://${p.subdomain}`)}\nCLOUDFLARE_API_TOKEN=${shq(token)}\nCLOUDFLARE_ACCOUNT_ID=${shq(c.accountId)}\n`;
     const memory = pagesMemory({ sub: p.subdomain, live, domain: inst.customDomain?.host, git: p.git });
     await api.exec(id, [
-      `grep -v -e '^SITES=' -e '^EXTRA_ORIGINS=' -e '^CLOUDFLARE_API_TOKEN=' -e '^CLOUDFLARE_ACCOUNT_ID=' ~/ak.env > ~/ak.env.new`,
+      `grep -v -e '^SITES=' -e '^EXTRA_ORIGINS=' -e '^AK_LIVE_URL=' -e '^CLOUDFLARE_API_TOKEN=' -e '^CLOUDFLARE_ACCOUNT_ID=' ~/ak.env > ~/ak.env.new`,
       `printf %s ${shq(Buffer.from(lines).toString("base64"))} | base64 -d >> ~/ak.env.new`,
       `chmod 600 ~/ak.env.new && mv ~/ak.env.new ~/ak.env`,
       `mkdir -p ~/.claude && touch ~/.claude/CLAUDE.md && { grep '^<!-- ak-' ~/.claude/CLAUDE.md || true; } > ~/.ak-keep && printf %s ${shq(Buffer.from(memory).toString("base64"))} | base64 -d > ~/.claude/CLAUDE.md && sed 's/^/\\n/' ~/.ak-keep >> ~/.claude/CLAUDE.md`,
@@ -327,10 +327,10 @@ async function syncDomain(id, c, origin) {
   const api = sprites(await mint(open(inst.assertion)));
   const { out } = await api.exec(id, `. ~/ak.env; printf '%s' "$EXTRA_ORIGINS"`, { timeoutMs: 60e3 });
   const had = out.trim().split(",").filter(Boolean);
-  const lines = `EXTRA_ORIGINS=${shq([...new Set([...had, ...(origin ? [origin] : [])])].join(","))}\nCLOUDFLARE_API_TOKEN=${shq(open(c.token))}\nCLOUDFLARE_ACCOUNT_ID=${shq(c.accountId)}\n`;
+  const lines = `EXTRA_ORIGINS=${shq([...new Set([...had, ...(origin ? [origin] : [])])].join(","))}\nAK_LIVE_URL=${shq(liveUrl(inst))}\nCLOUDFLARE_API_TOKEN=${shq(open(c.token))}\nCLOUDFLARE_ACCOUNT_ID=${shq(c.accountId)}\n`;
   const memory = pagesMemory({ sub: inst.pages.sub, live: inst.pages.branch ?? "main", domain: inst.customDomain?.host, git: inst.pages.git });
   await api.exec(id, [
-    `grep -v -e '^EXTRA_ORIGINS=' -e '^CLOUDFLARE_API_TOKEN=' -e '^CLOUDFLARE_ACCOUNT_ID=' ~/ak.env > ~/ak.env.new`,
+    `grep -v -e '^EXTRA_ORIGINS=' -e '^AK_LIVE_URL=' -e '^CLOUDFLARE_API_TOKEN=' -e '^CLOUDFLARE_ACCOUNT_ID=' ~/ak.env > ~/ak.env.new`,
     `printf %s ${shq(Buffer.from(lines).toString("base64"))} | base64 -d >> ~/ak.env.new`,
     `chmod 600 ~/ak.env.new && mv ~/ak.env.new ~/ak.env`,
     `mkdir -p ~/.claude && touch ~/.claude/CLAUDE.md && { grep '^<!-- ak-' ~/.claude/CLAUDE.md || true; } > ~/.ak-keep && printf %s ${shq(Buffer.from(memory).toString("base64"))} | base64 -d > ~/.claude/CLAUDE.md && sed 's/^/\\n/' ~/.ak-keep >> ~/.claude/CLAUDE.md`,
@@ -390,7 +390,7 @@ async function autoUpdate() {
   for (const inst of load().filter((i) => i.autoUpdate !== false && i.version !== version)) {
     try {
       const fk = feedbackKey(inst);
-      const { out } = await sprites(await mint(open(inst.assertion))).exec(inst.id, `if cat /proc/[0-9]*/cmdline 2>/dev/null | tr '\\0' ' ' | grep -q 'output-forma[t] stream-json'; then echo AK_BUSY; else ${fk.cmd}${INSTALL}; fi`);
+      const { out } = await sprites(await mint(open(inst.assertion))).exec(inst.id, `if cat /proc/[0-9]*/cmdline 2>/dev/null | tr '\\0' ' ' | grep -q 'output-forma[t] stream-json'; then echo AK_BUSY; else ${fk.cmd}${liveUrlCmd(inst)}${INSTALL}; fi`);
       if (out.includes("AK_BUSY")) { busy = true; console.log("autoupdate", inst.id, "busy, retrying in 5 min"); continue; }
       const cur = load().find((i) => i.id === inst.id);
       if (cur) upsert({ ...cur, ref: REF, version, feedback: fk.hash });
@@ -411,7 +411,7 @@ async function act(inst, action) {
   if (action === "restart") await api.exec(inst.id, "sprite-env services restart ak", { timeoutMs: 60e3 });
   else if (action === "update") {
     const version = await latest().catch(() => null), fk = feedbackKey(inst);
-    await api.exec(inst.id, fk.cmd + INSTALL);
+    await api.exec(inst.id, fk.cmd + liveUrlCmd(inst) + INSTALL);
     upsert({ ...(load().find((i) => i.id === inst.id) ?? inst), ref: REF, version, feedback: fk.hash });
   } else if (action === "delete") {
     await api.remove(inst.id).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
@@ -428,6 +428,9 @@ function siteUrl(inst) {
   const pg = inst.pages?.state === "live" && inst.pages;
   return pg ? (inst.customDomain?.status === "active" ? `https://${inst.customDomain.host}` : pg.live) : inst.starter ? inst.url : `https://${inst.domain}`;
 }
+// The production address for the Sprite's AK_LIVE_URL ("Back to live", MCP sign-in return): the custom domain once added.
+const liveUrl = (inst) => (inst.customDomain?.host ? `https://${inst.customDomain.host}` : siteUrl(inst));
+const liveUrlCmd = (inst) => `{ grep -v '^AK_LIVE_URL=' ~/ak.env || true; } > ~/ak.env.new && echo AK_LIVE_URL=${shq(liveUrl(inst))} >> ~/ak.env.new && chmod 600 ~/ak.env.new && mv ~/ak.env.new ~/ak.env && `;
 /** The site, already signed in to the bar as `email`: a single-use magic-link token the widget redeems from #ak_handoff=. */
 async function handoff(inst, email) {
   const site = siteUrl(inst), token = await linkToken(email);
