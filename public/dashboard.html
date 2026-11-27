@@ -98,9 +98,11 @@ function mail(i, me) {
     : m.status === "setting up" ? `<div class="meta">${esc(m.detail || "setting up")}…</div>`
     : m.status === "active" ? `<div class="meta">Sending from <b>${esc(m.from)}</b> ✓</div>`
     : m.status === "verifying" ? `<div class="meta">Resend is verifying <b>${esc(m.domain)}</b>. ${m.records ? `Add these records at your DNS provider:</div><pre>${m.records.map((r) => `${esc(r.type)}  ${esc(r.name)}  ${r.priority != null ? `${esc(r.priority)} ` : ""}${esc(r.content)}`).join("\n")}</pre><div class="meta">` : "We added its DNS records in Cloudflare; this usually takes a few minutes. "}Emails send from <b>${esc(m.from)}</b> once it's verified.</div>`
-    : `<p class="err">${esc(m.error)}</p>`;
+    : `<p class="err">${keyLink(m.error)}</p>`;
   return `<div class="meta"><label class="auto perm" title="The bar emails teammates you @mention, and this site's agent can send email for the site (a contact form, say).">Allow it to send email from ${esc(host)}<button class="switch" role="switch" aria-checked="${!!m && m.status !== "error"}" data-a="email-toggle" data-set="${!!m}"${m?.status === "setting up" ? " disabled" : ""}></button></label></div>${status}<div class="rsslot"></div>`;
 }
+// Resend's key errors name resend.com/api-keys: make it a link.
+const keyLink = (s) => esc(s).replace("resend.com/api-keys", `<a href="https://resend.com/api-keys" target="_blank" rel="noopener">resend.com/api-keys</a>`);
 // Connect Resend: the same guided steps as Cloudflare. Resend has no pre-filled key form, so step 2 spells it out.
 function rsForm(id) {
   return `<p class="small">1. Open Resend and sign up (free) or sign in.</p>
@@ -195,7 +197,7 @@ async function render(note) {
     const id = f.closest(".inst")?.dataset.id, btn = f.querySelector("button");
     btn.disabled = true; btn.textContent = "Connecting…";
     try { await api("resend", { key: f.querySelector("input").value }); if (id) await api(`instances/${id}/email`, {}); render(id ? "Resend connected. Setting up email…" : "Resend connected."); }
-    catch (err) { btn.disabled = false; btn.textContent = "Connect"; f.querySelector(".err")?.remove(); f.insertAdjacentHTML("beforeend", `<p class="err">${esc(err.message)}</p>`); }
+    catch (err) { btn.disabled = false; btn.textContent = "Connect"; f.querySelector(".err")?.remove(); f.insertAdjacentHTML("beforeend", `<p class="err">${keyLink(err.message)}</p>`); }
   }));
   rsWire();
   document.getElementById("rsre")?.addEventListener("click", (e) => {
