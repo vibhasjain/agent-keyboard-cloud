@@ -241,7 +241,14 @@ async function runSite(flow) {
   // Every site is hosted on Cloudflare Pages (connected before the flow starts).
   flow.detail = "hosting your site on Cloudflare Pages";
   await setupPages(r.sprite, user.token, cfs.get(flow.email));
-  const pages = load().find((i) => i.id === r.sprite)?.pages ?? {};
+  let inst = load().find((i) => i.id === r.sprite);
+  // The live domain typed at setup becomes the site's custom domain, as if added on the dashboard.
+  if (flow.domain && inst?.pages?.state === "live" && HOST.test(flow.domain) && !/\.(pages\.dev|sprites\.app|workers\.dev)$/.test(flow.domain)) {
+    flow.detail = `connecting ${flow.domain}`;
+    await addDomain(inst, cfs.get(flow.email), flow.domain).catch((e) => console.error("domain", r.sprite, e.message));
+    inst = load().find((i) => i.id === r.sprite);
+  }
+  const pages = inst?.pages ?? {};
   step(flow, "done", { result: { url: pages.live ?? r.url, pagesError: pages.state === "error" ? pages.error : null, tag: r.tag, starter: r.starter, repo: r.repo, tagPath, previous } });
 }
 
@@ -334,6 +341,13 @@ async function checkDomain(id, c) {
     upsert({ ...load().find((x) => x.id === id), mailWanted: false, mail: { status: "setting up", detail: "starting" } });
     setupEmail(id);
   }
+}
+/** Attach `host` to the site's Pages project, then point or explain its DNS (dashboard "Add domain", and the domain typed at setup). */
+async function addDomain(inst, c, host) {
+  await addPagesDomain(open(c.token), c.accountId, inst.pages.project, host);
+  upsert({ ...load().find((x) => x.id === inst.id), customDomain: { host, status: "pending" } });
+  await syncDomain(inst.id, c, `https://${host}`);
+  await checkDomain(inst.id, c);
 }
 /** After a custom domain change: let the bar on `origin` call the Sprite (CORS, EXTRA_ORIGINS), and
  *  rewrite the agent's memory so it knows the site's address and has the Cloudflare token. */
@@ -1097,10 +1111,7 @@ async function dispatch(req, res, u, s, b) {
         }
         const host = String(b?.host ?? "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/[/:].*$/, "").replace(/\.$/, "");
         if (!HOST.test(host) || /\.(pages\.dev|sprites\.app|workers\.dev)$/.test(host)) return send(res, 400, { error: "Type a domain like www.example.com" });
-        await addPagesDomain(token, c.accountId, inst.pages.project, host);
-        upsert({ ...inst, customDomain: { host, status: "pending" } });
-        await syncDomain(inst.id, c, `https://${host}`);
-        await checkDomain(inst.id, c);
+        await addDomain(inst, c, host);
         return send(res, 200, { ok: true });
       }
       if (m[2] === "email") {

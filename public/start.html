@@ -101,7 +101,7 @@ async function pick(me, error) {
       <label for="repo">Your site's repo</label>
       <select id="repo"><option value="">I don't have a site yet</option>${repos.map((r) => `<option value="${esc(r.full_name)}" data-home="${esc(r.homepage)}">${esc(r.full_name)}</option>`).join("")}</select>
       <p class="small">${repos.length ? `Showing repos from ${esc([...new Set(repos.map((r) => r.full_name.split("/")[0]))].join(", "))}. ` : ""}Repo in an organization, or one you left out? <a href="${esc(me.installUrl)}">Add it on GitHub</a>: pick the organization (or your account), then its repos. If you don't own the organization, GitHub asks its owners to approve.</p>
-      <div id="has"><label for="domain">Its live domain (optional)</label><input id="domain" placeholder="example.com" autocomplete="off">
+      <div id="has"><label for="domain">Its live domain (optional)</label><input id="domain" placeholder="example.com" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="url">
         <p class="small">Leave it blank to stage: every change gets its own preview link on Cloudflare Pages, and the bar ships to your live site when you tell it to. With a domain, changes go live right away.</p></div>
       <div id="none" hidden><label for="name">Name for your new site</label><input id="name" value="my-site" autocomplete="off">
         <p class="small">We'll create the repo on your GitHub with a starter page, hosted on Cloudflare Pages.</p></div>
