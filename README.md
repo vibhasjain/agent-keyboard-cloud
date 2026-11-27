@@ -1,7 +1,32 @@
-# agent-keyboard-cloud
-Managed Agent Keyboard on Fly.io Sprites: auth.md sign-up, provisioning, dashboard. Spec: Notes #12 on agentkeyboard.com.
+# Agent Keyboard Cloud
 
-No dependencies; Node 22+.
+Your own coding agent, living inside your website, running on your own [Fly.io Sprite](https://sprites.dev).
+
+Open [agentkeyboard.com/start](https://agentkeyboard.com/start), sign in with GitHub, Fly and Claude, and about a minute later your site has a prompt bar in the corner. Type or hold to talk ("make the headline say hello", "add a dark mode"), and a real Claude Code session edits your site's repo, commits and ships it. You watch every step, and the page updates when it's done.
+
+This repo is the part that sets that up and runs it for you: the sign-up, the provisioning and the dashboard. The bar and the agent server it installs are open source at [vibhasjain/agent-keyboard](https://github.com/vibhasjain/agent-keyboard).
+
+## How it works
+
+1. **GitHub.** Pick a repo that already has a site, or "I don't have a site yet" and we create a starter one.
+2. **Fly.** We show a short code: open fly.io and enter it. That's Fly's auth.md agent sign-up, so we never handle your Fly password and the agent works in your own account.
+3. **Claude.** Sign in to Claude once. Your token goes straight into a **Sprites connector** scoped to your Sprite, so it never reaches us.
+4. **Your Sprite.** We create `ak-<your-site>`, a Sprite in your Fly account, install the Agent Keyboard server on it, and give it a deploy key for just your repo.
+5. **Your site.** It's hosted on Cloudflare Pages (or wherever it already deploys) with the bar on it. From then on, you change your site by asking it.
+
+Your Sprite, your connector, your bill. Each site runs in its own Sprite.
+
+## What else you get
+
+- **A dashboard** at [agentkeyboard.com/dashboard](https://agentkeyboard.com/dashboard): status, restart, update, delete. Sprites auto-update when a new version ships, unless a job is running.
+- **Custom domains** on Cloudflare Pages, set up from the dashboard.
+- **Email from your own domain** (through your Resend account) for @mentions and notifications.
+- **Claude as a remote control.** Add `https://agentkeyboard.com/mcp` as a connector in Claude to set up sites, or ask a site's agent for a change, from any Claude chat. Your sites' agents can also message each other.
+- **Moving in.** Already running Agent Keyboard yourself? "Bring them over" moves your notes, memory and settings to your Sprite.
+
+## Inside the repo
+
+No build step; Node 22+.
 
 - `src/fly.mjs`: Fly auth.md (register, claim poll, mint from `identity_assertion`) and the Sprites API (create, public URL, connectors, exec).
 - `src/github.mjs`: repo lookup, starter repo creation, deploy keys. Takes any token with repo rights (a PAT today, GitHub App installation tokens later).
