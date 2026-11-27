@@ -9,7 +9,7 @@ a{ color:var(--amber-2); text-decoration:none; } a:hover{ color:var(--amber); }
 .top{ display:flex; align-items:center; justify-content:space-between; padding:22px 0 48px; font-size:14px; color:var(--ink-2); }
 .brand{ display:flex; align-items:center; gap:11px; color:var(--ink); } .brand img{ width:41px; } .brand b{ font-weight:600; font-size:15px; }
 h1{ font-weight:500; letter-spacing:-.025em; font-size:clamp(30px,5vw,42px); line-height:1.1; text-wrap:balance; margin-bottom:14px; }
-.headrow{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; } .headrow h1{ margin:0; } #acts{ display:flex; gap:10px; } #acts .btn{ color:var(--amber); }
+.headrow{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; } .headrow h1{ margin:0; } #acts{ display:flex; gap:10px; } #acts .btn.ghost{ color:var(--amber); }
 h1 em{ font-style:normal; color:var(--amber); }
 p{ color:var(--ink-2); margin-bottom:14px; } .small{ font-size:13px; color:var(--ink-3); }
 .card{ background:var(--bg-2); border:1px solid var(--rule-2); border-radius:14px; padding:22px; margin:24px 0; }

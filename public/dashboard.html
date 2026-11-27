@@ -151,7 +151,7 @@ async function render(note) {
   document.getElementById("who").innerHTML = `<details class="acct-menu"><summary aria-label="Account: ${esc(me.login)}"><span aria-hidden="true">${esc(me.login.slice(0, 1).toUpperCase())}</span><img src="https://github.com/${encodeURIComponent(me.login)}.png?size=64" alt="" onerror="this.remove()"></summary><div><span>Signed in as ${esc(me.login)}</span><a href="/start">${ICON.add}Add a site</a><button type="button" id="out">${ICON.out}Sign out</button><button type="button" id="del" aria-disabled="true" title="Delete all your sites first, then you can delete your account.">${ICON.del}Delete account</button></div></details>`;
   document.getElementById("out").onclick = () => api("logout", {}).then(() => location.reload());
   document.getElementById("del").onclick = () => alert("Delete all your sites first, then you can delete your account.");
-  document.getElementById("acts").innerHTML = `${claudeBtn(me)}<a class="btn ghost round" href="/start" title="Add a site" aria-label="Add a site">${ICON.add}</a>`;
+  document.getElementById("acts").innerHTML = `${claudeBtn(me)}<a class="btn round" href="/start" title="Add a site" aria-label="Add a site">${ICON.add}</a>`;
   let list;
   let latest;
   try { ({ instances: list, latest } = await api("instances")); } catch (e) { $app.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
