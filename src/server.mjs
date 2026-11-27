@@ -13,8 +13,8 @@ import { claudeLoginFinish, claudeLoginStart } from "./claude.mjs";
 import { mint, pollClaim, register, sprites } from "./fly.mjs";
 import { appReady, authorizeUrl, createdFromManifest, installationPage, installUrl, loadApp, manifest, refreshUser, signIn, userRepos } from "./githubapp.mjs";
 import { mcp } from "./mcp.mjs";
-import { addTag, getRepo, putSecret, putVariable, writeFile } from "./github.mjs";
-import { TOKEN_URL, WORKFLOW, addPagesDomain, addRecords, cnameOf, ensureProject, findZone, isApex, pagesDomain, pagesMemory, CF_MEMORY, pointDns, removePagesDomain, verify, accountLabel } from "./cloudflare.mjs";
+import { addTag, getRepo, putSecret, putVariable, removeDeploySetup, writeFile } from "./github.mjs";
+import { TOKEN_URL, WORKFLOW, addPagesDomain, addRecords, cnameOf, deleteProject, ensureProject, findZone, isApex, pagesDomain, pagesMemory, CF_MEMORY, pointDns, removePagesDomain, verify, accountLabel } from "./cloudflare.mjs";
 import { provision, slug, spriteName } from "./provision.mjs";
 import { checkKey, deleteKey, ensureDomain, fqdn, getDomain, sendingKey, verifyDomain } from "./resend.mjs";
 
@@ -257,7 +257,7 @@ async function setupPages(id, ghToken, c) {
     set({ state: "setting up", detail: "creating the Pages project", error: null });
     const gr = await getRepo(ghToken, inst.repo), live = gr.default_branch || "main";
     const p = await ensureProject(token, c.accountId, inst.siteId, live, { id: gr.id, owner: gr.owner?.login, name: gr.name });
-    set({ detail: p.git ? `using your Pages project ${p.name}` : "adding the deploy workflow to your repo", project: p.name, sub: p.subdomain, git: !!p.git });
+    set({ detail: p.git ? `using your Pages project ${p.name}` : "adding the deploy workflow to your repo", project: p.name, sub: p.subdomain, git: !!p.git, created: p.created || (inst.pages?.created && inst.pages.project === p.name) });
     // A project already Git-connected to the repo deploys every push itself: a workflow too would deploy twice.
     if (!p.git) {
       await putSecret(ghToken, inst.repo, "CLOUDFLARE_API_TOKEN", token);
@@ -420,7 +420,7 @@ const tick = () => (updating ??= autoUpdate().catch((e) => { console.error("auto
 setTimeout(tick, 60e3).unref(); // also right after a deploy, so frequent deploys never starve it
 setInterval(tick, 3600e3).unref();
 
-async function act(inst, action) {
+async function act(inst, action, s, b) {
   const creds = await mint(open(inst.assertion));
   const api = sprites(creds);
   if (action === "restart") await api.exec(inst.id, "sprite-env services restart ak", { timeoutMs: 60e3 });
@@ -429,12 +429,23 @@ async function act(inst, action) {
     await api.exec(inst.id, fk.cmd + liveUrlCmd(inst) + INSTALL);
     upsert({ ...(load().find((i) => i.id === inst.id) ?? inst), ref: REF, version, feedback: fk.hash });
   } else if (action === "delete") {
+    // What we added outside the Sprite goes too (best effort: the site is deleted either way; misses come back as warnings).
+    const warnings = [], c = cfs.get(inst.email), pg = inst.pages;
+    if (pg?.project && !pg.git) {
+      await fresh(s.login);
+      const gu = ghUser(s.login);
+      await (gu ? removeDeploySetup(gu.token, inst.repo, WORKFLOW_PATH) : Promise.reject(new Error("signed out"))).catch((e) => { console.error("delete repo", inst.id, e.message); warnings.push(`We couldn't remove the Cloudflare deploy from ${inst.repo}. Delete ${WORKFLOW_PATH}, the CLOUDFLARE_API_TOKEN secret and the CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_PAGES_PROJECT variables there yourself.`); });
+    }
+    const rk = resendKey(inst.email);
+    if (inst.mail?.keyId) await (rk ? deleteKey(rk, inst.mail.keyId) : Promise.reject(new Error("no key"))).catch(() => warnings.push("We couldn't delete the site's sending key on Resend. Delete it there yourself."));
+    if (b?.offline === true && pg?.created) await (c ? deleteProject(open(c.token), c.accountId, pg.project) : Promise.reject(new Error("no token"))).catch((e) => { console.error("delete pages", inst.id, e.message); warnings.push(`We couldn't delete the Cloudflare Pages project ${pg.project}. Delete it there yourself.`); });
     await api.remove(inst.id).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
     // The Claude connector is shared by the user's sites: it stays while the account or another site uses it.
     const shared = (c) => c === inst.connection && (c === accts.get(inst.email)?.claude || load().some((o) => o.id !== inst.id && o.connection === c));
     for (const c of [inst.connection, inst.mcp?.connection].filter((c) => c && !shared(c))) await api.removeConnection(c).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
     mcpServer.revoke(inst.id);
     save(load().filter((i) => i.id !== inst.id));
+    return warnings;
   }
 }
 
@@ -1060,8 +1071,8 @@ async function dispatch(req, res, u, s, b) {
         setupPages(inst.id, gu.token, c);
         return send(res, 200, { ok: true });
       }
-      await act(inst, m[2]);
-      return send(res, 200, { ok: true });
+      const warnings = await act(inst, m[2], s, b);
+      return send(res, 200, { ok: true, ...(warnings?.length ? { warning: warnings.join(" ") } : {}) });
     }
     const h = routes[`${req.method} ${u.pathname.replace(/\/$/, "") || "/"}`];
     if (!h) return send(res, 404, { error: "not found" });

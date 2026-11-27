@@ -150,3 +150,12 @@ export async function writeFile(token, fullName, branch, path, content, message)
   return true;
 }
 
+
+/** Undo the Pages deploy setup on delete: the workflow file, the secret and the variables (each skipped when already gone). */
+export async function removeDeploySetup(token, fullName, path) {
+  const gone = (e) => (e.status === 404 ? null : Promise.reject(e));
+  await gh(token, "DELETE", `/repos/${fullName}/actions/secrets/CLOUDFLARE_API_TOKEN`).catch(gone);
+  for (const v of ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_PAGES_PROJECT"]) await gh(token, "DELETE", `/repos/${fullName}/actions/variables/${v}`).catch(gone);
+  const f = await gh(token, "GET", `/repos/${fullName}/contents/${path}`).catch(gone);
+  if (f?.sha) await gh(token, "DELETE", `/repos/${fullName}/contents/${path}`, { message: "Remove the Cloudflare Pages deploy (Agent Keyboard site deleted)", sha: f.sha });
+}

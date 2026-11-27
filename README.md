@@ -20,7 +20,7 @@ Your Sprite, your connector, your bill. Each site runs in its own Sprite.
 
 ## What else you get
 
-- **A dashboard** at [agentkeyboard.com/dashboard](https://agentkeyboard.com/dashboard): status, restart, update, delete. Sprites auto-update when a new version ships, unless a job is running.
+- **A dashboard** at [agentkeyboard.com/dashboard](https://agentkeyboard.com/dashboard): status, restart, update, delete (delete also removes the Cloudflare deploy workflow, secret and variables and the Resend sending key it added; "take the website offline" also deletes the Pages project, only one Agent Keyboard created). Sprites auto-update when a new version ships, unless a job is running.
 - **Custom domains** on Cloudflare Pages, set up from the dashboard.
 - **Email from your own domain** (through your Resend account) for @mentions and notifications.
 - **Claude as a remote control.** Add `https://agentkeyboard.com/mcp` as a connector in Claude to set up sites, or ask a site's agent for a change, from any Claude chat. Your sites' agents can also message each other.

@@ -288,11 +288,13 @@ async function render(note) {
       card.querySelectorAll("[data-a^=mcp-]").forEach((x) => (x.disabled = true));
       return api(`instances/${id}/mcp`, { talk, manage }).then(() => render(), (e) => render(e.message));
     }
-    if (a === "delete" && !confirm(`Delete ${id}? This removes the Sprite and its Claude connector from your Fly account. Your repo stays.`)) return;
+    const inst = list.find((x) => x.id === id), pg = inst?.pages;
+    if (a === "delete" && !confirm(`Delete ${id}? This removes the Sprite and its Claude connector from your Fly account${pg?.project && !pg.git ? ", and the Cloudflare deploy workflow, secret and variables from your repo" : ""}${inst?.mail?.keyId ? ", and the site's Resend sending key" : ""}. Your repo and its code stay.`)) return;
+    const offline = a === "delete" && !!pg?.created && confirm(`Also take the website offline? OK deletes its Cloudflare Pages project ${pg.project}${inst.customDomain ? ` (and ${inst.customDomain.host} stops serving it)` : ""}. Cancel keeps the site up as it is now.`);
     (b.closest(".row")?.querySelectorAll("button") ?? [b]).forEach((x) => (x.disabled = true));
     b.classList.remove("round"); // the progress label replaces the icon
     b.textContent = LABEL[a];
-    try { const r = await api(`instances/${id}/${a}`, {}); render(a === "delete" ? `Deleted ${id}.` : a === "domain-remove" ? "Removed the domain." : a === "email-remove" ? "Email is off." : a === "email" ? "Setting up email…" : a === "tag" ? `Added the tag to ${r.path}. Your host redeploys from that commit.` : a === "import-skip" ? (r.path ? "Starting fresh. The bar on your site now points here; your host redeploys in a minute." : "Starting fresh.") : `${id}: ${a} done.`); }
+    try { const r = await api(`instances/${id}/${a}`, offline ? { offline } : {}); render(a === "delete" ? `Deleted ${id}.${r.warning ? ` ${r.warning}` : ""}` : a === "domain-remove" ? "Removed the domain." : a === "email-remove" ? "Email is off." : a === "email" ? "Setting up email…" : a === "tag" ? `Added the tag to ${r.path}. Your host redeploys from that commit.` : a === "import-skip" ? (r.path ? "Starting fresh. The bar on your site now points here; your host redeploys in a minute." : "Starting fresh.") : `${id}: ${a} done.`); }
     catch (e) { if (e.message === "Sign in with GitHub again") location.href = "/cloud/github/login?next=dashboard"; else render(e.message); }
   }));
 }

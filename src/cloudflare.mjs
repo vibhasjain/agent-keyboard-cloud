@@ -49,9 +49,9 @@ export async function ensureProject(token, accountId, name, productionBranch, re
     if (c) return { name: c.name, subdomain: c.subdomain, git: true };
     if ((list ?? []).length < 50) break;
   }
-  const p = (await cf(token, "GET", `${path}/${name}`).catch((e) => (e.status === 404 ? null : Promise.reject(e))))
-    ?? (await cf(token, "POST", path, { name, production_branch: productionBranch }));
-  return { name: p.name, subdomain: p.subdomain };
+  const had = await cf(token, "GET", `${path}/${name}`).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
+  const p = had ?? (await cf(token, "POST", path, { name, production_branch: productionBranch }));
+  return { name: p.name, subdomain: p.subdomain, created: !had };
 }
 
 /** The workflow committed to the user's repo: build (if there's a build script) and deploy every branch. */
@@ -112,6 +112,11 @@ export const addPagesDomain = (token, a, p, host) =>
   cf(token, "POST", domains(a, p), { name: host }).catch((e) => (/already/i.test(e.message) ? null : Promise.reject(e)));
 export const removePagesDomain = (token, a, p, host) => cf(token, "DELETE", `${domains(a, p)}/${host}`).catch(ok404);
 /** Pages' view of the domain: { status: "active" | "pending" | …, verification_data, validation_data }. */
+/** Delete a Pages project (its custom domains first): the site goes offline. */
+export async function deleteProject(token, a, p) {
+  for (const d of (await cf(token, "GET", domains(a, p)).catch(ok404)) ?? []) await cf(token, "DELETE", `${domains(a, p)}/${d.name}`).catch(ok404);
+  await cf(token, "DELETE", `/accounts/${a}/pages/projects/${p}`).catch(ok404);
+}
 export const pagesDomain = (token, a, p, host) => cf(token, "GET", `${domains(a, p)}/${host}`);
 
 /** The zone in this account that holds `host` (host itself or a parent), or null. */
