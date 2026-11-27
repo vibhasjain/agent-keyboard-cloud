@@ -422,6 +422,34 @@ async function feedbackReply(req, res) {
   appendFileSync(`${DATA}/feedback.jsonl`, JSON.stringify({ reply: f.id, at: new Date().toISOString(), text: f.text.slice(0, 5000), code }) + "\n", { mode: 0o600 });
   send(res, code === 200 ? 200 : 502, code === 200 ? { ok: true } : { error: `the site answered ${code}` });
 }
+// Spec 30: a sleeping Sprite's cron timer sleeps too. Each Sprite reports when its next slot is due
+// (every few minutes while awake); at that time we wake it with an exec that stays open past the bar's
+// boot grace and first tick (7 min), then while a job runs (up to 1 h), so the Sprite stays up for the run.
+async function wakeAt(req, res) {
+  const inst = load().find((i) => i.feedback && i.feedback === sha(String(req.headers["x-ak-feedback"] ?? "")));
+  if (!inst) return send(res, 401, { error: "unknown instance" });
+  let raw = "";
+  for await (const c of req) if ((raw += c).length > 1e3) return send(res, 413, { error: "too large" });
+  let f;
+  try { f = JSON.parse(raw); } catch { return send(res, 400, { error: "JSON body required" }); }
+  const at = f?.at === null ? null : Date.parse(f?.at);
+  if (at !== null && !Number.isFinite(at)) return send(res, 400, { error: "at must be an ISO time or null" });
+  const iso = at === null ? undefined : new Date(at).toISOString();
+  if (inst.wakeAt !== iso) upsert({ ...inst, wakeAt: iso });
+  send(res, 200, { ok: true });
+}
+const WAKE = `sleep 420; for i in $(seq 120); do cat /proc/[0-9]*/cmdline 2>/dev/null | tr '\\0' ' ' | grep -q 'output-forma[t] stream-json' || break; sleep 30; done; true`;
+const waking = new Set();
+setInterval(() => {
+  for (const inst of load().filter((i) => i.wakeAt && Date.parse(i.wakeAt) <= Date.now() && !waking.has(i.id))) {
+    waking.add(inst.id);
+    upsert({ ...inst, wakeAt: undefined }); // once awake it reports its next slot
+    console.log("cron wake", inst.id);
+    (async () => sprites(await mint(open(inst.assertion))).exec(inst.id, WAKE, { timeoutMs: 75 * 60e3 }))()
+      .catch((e) => console.error("cron wake", inst.id, e.message))
+      .finally(() => waking.delete(inst.id));
+  }
+}, 60e3).unref();
 // Auto-update (on unless the owner turned it off): hourly, each Sprite behind the latest version reinstalls,
 // skipping any that is running a job (a Claude CLI turn) so nothing is cut off; it tries again in 5 minutes.
 async function autoUpdate() {
@@ -1112,6 +1140,7 @@ createServer(async (req, res) => {
     if (s) await fresh(s.login);
     if (await mcpServer(req, res, u, s)) return;
     if (req.method === "POST" && u.pathname === "/cloud/feedback") return await feedback(req, res); // its own 20 KB body cap
+    if (req.method === "POST" && u.pathname === "/cloud/wake-at") return await wakeAt(req, res);
     if (req.method === "POST" && u.pathname === "/cloud/feedback-reply") return await feedbackReply(req, res);
     if (req.method === "POST" && u.pathname === "/cloud/handoff") return await sandboxHandoff(req, res);
     await dispatch(req, res, u, s, req.method === "POST" ? await body(req) : null);
