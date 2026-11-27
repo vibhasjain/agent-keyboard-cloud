@@ -397,6 +397,24 @@ async function feedback(req, res) {
   if (!r.ok) console.error("feedback inbox", report.id, r.status); // kept in feedback.jsonl either way
   send(res, 200, { ok: true, id: report.id });
 }
+// Reply loop (spec 23): halo tells us what happened to a report; we post it into the reporting site's chat.
+async function feedbackReply(req, res) {
+  const want = Buffer.from(env.FEEDBACK_INBOX_SECRET ?? ""), got = Buffer.from(String(req.headers["x-ak-feedback"] ?? ""));
+  if (!want.length || got.length !== want.length || !timingSafeEqual(got, want)) return send(res, 401, { error: "unauthorized" });
+  let raw = "";
+  for await (const c of req) if ((raw += c).length > 10e3) return send(res, 413, { error: "too large" });
+  let f;
+  try { f = JSON.parse(raw); } catch { return send(res, 400, { error: "JSON body required" }); }
+  const report = existsSync(`${DATA}/feedback.jsonl`) && readFileSync(`${DATA}/feedback.jsonl`, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((r) => r.id === f.id);
+  const inst = report && load().find((i) => i.id === report.instance);
+  if (!inst || typeof f.text !== "string" || !f.text.trim()) return send(res, 404, { error: "unknown report" });
+  const payload = Buffer.from(JSON.stringify({ text: f.text.slice(0, 5000), page: report.page || "/" })).toString("base64");
+  const api = sprites(await mint(open(inst.assertion)));
+  const { out } = await api.exec(inst.id, `. ~/ak.env; printf %s ${shq(payload)} | base64 -d | curl -sS -X POST "http://127.0.0.1:$PORT/sites/${inst.siteId}/feedback-update" -H "x-ak-internal: $AK_INTERNAL_SECRET" -H 'Content-Type: application/json' --data-binary @- -w '\n%{http_code}'`, { timeoutMs: 60e3 });
+  const code = Number(out.trim().split("\n").pop());
+  appendFileSync(`${DATA}/feedback.jsonl`, JSON.stringify({ reply: f.id, at: new Date().toISOString(), text: f.text.slice(0, 5000), code }) + "\n", { mode: 0o600 });
+  send(res, code === 200 ? 200 : 502, code === 200 ? { ok: true } : { error: `the site answered ${code}` });
+}
 // Auto-update (on unless the owner turned it off): hourly, each Sprite behind the latest version reinstalls,
 // skipping any that is running a job (a Claude CLI turn) so nothing is cut off; it tries again in 5 minutes.
 async function autoUpdate() {
@@ -1087,6 +1105,7 @@ createServer(async (req, res) => {
     if (s) await fresh(s.login);
     if (await mcpServer(req, res, u, s)) return;
     if (req.method === "POST" && u.pathname === "/cloud/feedback") return await feedback(req, res); // its own 20 KB body cap
+    if (req.method === "POST" && u.pathname === "/cloud/feedback-reply") return await feedbackReply(req, res);
     if (req.method === "POST" && u.pathname === "/cloud/handoff") return await sandboxHandoff(req, res);
     await dispatch(req, res, u, s, req.method === "POST" ? await body(req) : null);
   } catch (e) {
