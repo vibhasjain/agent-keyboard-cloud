@@ -5,7 +5,7 @@
 // dashboard (dispatch), with the session the access token stands for. Secrets (the Cloudflare token,
 // the Claude code) are pasted on /start, never into the chat.
 
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createPrivateKey, generateKeyPairSync, randomBytes, randomUUID, sign } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -34,6 +34,29 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
   db ??= { clients: {}, access: {}, refresh: {} };
   db.sites ??= {}; // sha(token) → { login, email, from, talk, manage }: a site agent's grant (spec #16), until switched off
   const save = () => writeFileSync(FILE, seal(JSON.stringify(db)), { mode: 0o600 });
+  // Spec 32: anymcp's bar on the dashboard. db.users: sha(token) → { login, email }, one MCP token per user, until revoked.
+  // Its bar knows the user from an ES256 JWT of the dashboard session, checked against /.well-known/jwks.json.
+  db.users ??= {};
+  if (!db.jwk) (db.jwk = generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ format: "jwk" })), save();
+  const kid = sha(db.jwk.x).slice(0, 16), jwkPriv = createPrivateKey({ key: db.jwk, format: "jwk" });
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  function jwt(s) {
+    const now = Math.floor(Date.now() / 1000), m = `${b64({ alg: "ES256", typ: "JWT", kid })}.${b64({ iss: BASE, aud: "anymcp", sub: s.login, email: s.email, iat: now, exp: now + 600 })}`;
+    return `${m}.${sign("sha256", Buffer.from(m), { key: jwkPriv, dsaEncoding: "ieee-p1363" }).toString("base64url")}`;
+  }
+  const dropUser = (login) => { for (const [h, v] of Object.entries(db.users)) if (v.login === login) delete db.users[h]; };
+  const anymcpJson = {
+    name: "Agent Keyboard",
+    mcpUrl: `${BASE}/mcp`,
+    mcpName: "agent-keyboard",
+    jwksUrl: `${BASE}/.well-known/jwks.json`,
+    iss: BASE,
+    aud: "anymcp",
+    confirm: ["site_action", "remove_domain", "remove_teammate", "remove_email"],
+    model: "sonnet",
+    maxBudgetUsd: 1,
+    instructions: "Manage the user's Agent Keyboard sites. To change a site itself (its code or content), use send_message: it asks that site's own agent, which edits and ships the site.",
+  };
   const barTokens = new Map(); // email → { token, exp }: a Supabase session minted like /cloud/open's handoff
   const sent = new Map(); // site id → [{ text, at, job }]: relayed messages, so read_conversation shows them before the agent picks them up
   // A tool call must answer well inside the proxies in front of /mcp (Netlify, the Sprites gateway): past them the caller
@@ -84,6 +107,18 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
   return Object.assign(async function handle(req, res, u, s) {
     const path = u.pathname.replace(/\/$/, "");
     if (req.method === "OPTIONS" && (path === "/mcp" || path.startsWith("/oauth/") || path.startsWith("/.well-known/oauth-"))) return (res.writeHead(204, { ...CORS, "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS" }), res.end(), true);
+    if (req.method === "GET" && path === "/.well-known/jwks.json") return (json(res, 200, { keys: [{ kty: "EC", crv: "P-256", x: db.jwk.x, y: db.jwk.y, kid, alg: "ES256", use: "sig" }] }), true);
+    if (req.method === "GET" && path === "/.well-known/anymcp.json") return (json(res, 200, anymcpJson), true);
+    if (path.startsWith("/cloud/anymcp/") && ["jwt", "token", "token/revoke"].includes(path.slice(14))) {
+      if (!s) return (json(res, 401, { error: "Sign in" }), true);
+      if (path.endsWith("/jwt")) return (json(res, 200, { token: jwt(s) }), true);
+      if (req.method !== "POST") return (json(res, 405, { error: "POST" }), true);
+      dropUser(s.login);
+      const token = path.endsWith("/token") ? randomBytes(32).toString("base64url") : null;
+      if (token) db.users[sha(token)] = { login: s.login, email: s.email };
+      save();
+      return (json(res, 200, { token }), true);
+    }
     if (req.method === "GET" && path.startsWith("/.well-known/oauth-protected-resource")) return (json(res, 200, metaResource), true);
     if (req.method === "GET" && (path.startsWith("/.well-known/oauth-authorization-server") || path.startsWith("/.well-known/openid-configuration"))) return (json(res, 200, metaServer), true);
 
@@ -132,7 +167,7 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
 
     if (path === "/mcp") {
       const tok = /^Bearer (.+)$/.exec(req.headers.authorization ?? "")?.[1];
-      const g = tok && (db.access[sha(tok)] ?? db.sites[sha(tok)]);
+      const g = tok && (db.access[sha(tok)] ?? db.sites[sha(tok)] ?? db.users[sha(tok)]);
       if (!g || g.exp < Date.now() || (g.from && !load().some((i) => i.id === g.from && i.email === g.email))) return (json(res, 401, { error: "invalid_token" }, { "WWW-Authenticate": `Bearer resource_metadata="${BASE}/.well-known/oauth-protected-resource"` }), true);
       await fresh(g.login);
       for (const [k, v] of Object.entries(CORS)) res.setHeader(k, v);
@@ -157,6 +192,7 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
     forget(login, email) {
       for (const k of ["access", "refresh"]) for (const [h, v] of Object.entries(db[k])) if (v.login === login) delete db[k][h];
       for (const [h, v] of Object.entries(db.sites)) if (v.email === email) delete db.sites[h];
+      dropUser(login);
       save();
     },
     revoke(id) {

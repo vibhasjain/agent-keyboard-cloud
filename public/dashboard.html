@@ -181,7 +181,8 @@ async function render(note) {
         <div class="meta"><label class="auto perm" title="Restart, update or delete any of your sites, this one included, and manage their domains and teammates. It confirms destructive steps with you first.">Allow it to manage your Agent Keyboard sites, this one too<button class="switch" role="switch" aria-checked="${!!i.mcp?.manage}" data-a="mcp-manage"></button></label></div>${i.mail || (i.pages?.state === "live" && i.customDomain?.status === "active") ? mail(i, me) : ""}${team(i)}</details><div class="tools"><button class="btn ghost round" data-a="restart" title="Restart (only needed if the bar is stuck)" aria-label="Restart">${ICON.restart}</button><button class="btn ghost round danger" data-a="delete" title="Delete site" aria-label="Delete site"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/></svg></button></div><a class="btn primary" href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener">Open site</a></div>
     </div>`;
   }).join("") + (list.length ? `<p class="small hint">Bar not showing? Open from here to enable.</p>` : "") + `${me.cloudflare ? `<p class="small acct">Cloudflare: connected (${esc(me.cloudflare)})<span><a href="#" id="cfre">Use a different token</a> · <a href="#" id="cfx">Disconnect</a></span></p>` : ""}${me.resend ? `<p class="small acct">Resend: connected (${esc(me.resend)})<span><a href="#" id="rsre">Use a different key</a> · <a href="#" id="rsx-acct">Disconnect</a></span></p>` : ""}${me.billing?.ours ? `<p class="small acct">Claude: Agent Keyboard's, pay as you go ($${usd(me.billing.credit)} credit · $${usd(me.billing.month)} used this month)<span>Top up ${me.billing.topups.map((n) => `<a href="#" class="topup" data-usd="${n}">$${n}</a>`).join(" ")} · <a href="#" id="clre">Switch to my Claude</a></span></p>`
-      : me.claudeAccount ? `<p class="small acct">Claude: connected<span><a href="#" id="clre">Reconnect Claude</a>${me.billing ? ` · <a href="#" id="clours" title="Pay as you go on our Claude: no subscription needed">Use Agent Keyboard's Claude</a>` : ""}</span></p>` : ""}<div id="amslot"></div><div id="cfslot"></div>`;
+      : me.claudeAccount ? `<p class="small acct">Claude: connected<span><a href="#" id="clre">Reconnect Claude</a>${me.billing ? ` · <a href="#" id="clours" title="Pay as you go on our Claude: no subscription needed">Use Agent Keyboard's Claude</a>` : ""}</span></p>` : ""}<div id="amslot"></div><div id="chatslot"></div><div id="cfslot"></div>`;
+  amRow();
   // Spec 31: anymcp agents turned on with this setup.
   if (me.anymcp) api("anymcp").then(({ agents }) => {
     document.getElementById("amslot").innerHTML = agents.map((a) => `<p class="small acct">anymcp: ${esc(a.app)} on${a.stale ? " (still on your previous Claude: switch it from its bar)" : ""}<span><a href="#" class="amoff" data-sprite="${esc(a.sprite)}" data-app="${esc(a.app)}">Turn off</a></span></p>`).join("");
@@ -348,6 +349,36 @@ function listen(url) {
   events.onerror = () => { if (events.readyState === EventSource.CLOSED) { events = null; setTimeout(render, 5000); } };
 }
 </script>
+<script>
+// Spec 32: anymcp.chat's agent, to manage these sites by chatting. Its bar knows the user from a short JWT of this
+// session; Turn on gives it an MCP token for /mcp, revoked once the agent is off.
+let amJwt, amOn = null, amStarting = false;
+window.anymcp = { token: async () => {
+  if (!amJwt || amJwt.exp < Date.now() + 60e3) { const r = await fetch("/cloud/anymcp/jwt"); amJwt = r.ok ? { t: (await r.json()).token, exp: Date.now() + 600e3 } : null; }
+  return amJwt?.t ?? null;
+} };
+function amRow() {
+  const el = document.getElementById("chatslot");
+  if (!el || amOn === null) return;
+  el.innerHTML = `<p class="small acct" title="An agent in a chat bar on this page that lists, sets up and manages your sites and asks their agents for changes. It runs on a Sprite in your Fly account with your Claude.">Chat agent: ${amOn ? "on" : "off"}<span><a href="#" id="amtog">${amOn ? "Turn off" : "Turn on"}</a></span></p>`;
+  document.getElementById("amtog").onclick = async (e) => {
+    e.preventDefault();
+    try {
+      if (amOn) { if (confirm("Turn off the chat agent? This deletes its Sprite, its chat and its Claude sign-in.")) await anymcp.disable(); return; }
+      amStarting = true;
+      await anymcp.enable((await api("anymcp/token", {})).token);
+    } catch (err) { amStarting = false; alert(err.message); }
+  };
+}
+addEventListener("anymcp:status", (e) => {
+  const { on, setup } = e.detail;
+  if (on || setup) amStarting = false;
+  else if (!amStarting && amOn !== false) api("anymcp/token/revoke", {}).catch(() => {}); // once per turn-off, not every check
+  if (amOn !== on) { amOn = on; amRow(); }
+});
+addEventListener("anymcp:changed", () => render());
+</script>
+<script src="https://anymcp.chat/bar.js" data-theme="dark" data-accent="#ffb86b" defer></script>
 <script src="https://agent-keyboard.fly.dev/widget.js" data-site="halo" data-accent="#ffb86b" data-theme="dark" data-summon="signed-out" defer></script>
 </body>
 </html>
