@@ -55,6 +55,7 @@ export function mcp({ notify, BASE, DATA, seal, open, ghUser, fresh, dispatch, s
     confirm: ["site_action", "remove_domain", "remove_teammate", "remove_email"],
     model: "sonnet",
     maxBudgetUsd: 1,
+    setup: { name: "Agent Keyboard", url: `${BASE}/anymcp` }, // anymcp's bar offers "Use my Agent Keyboard setup" (spec 31) only on apps whose file has this
     instructions: "Manage the user's Agent Keyboard sites. To change a site itself (its code or content), use send_message: it asks that site's own agent, which edits and ships the site.",
   };
   const barTokens = new Map(); // email → { token, exp }: a Supabase session minted like /cloud/open's handoff
