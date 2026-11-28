@@ -186,6 +186,8 @@ async function render(note) {
   // Spec 31: anymcp agents turned on with this setup.
   // This page's own agent ("Agent Keyboard") is the Chat agent row below, so it isn't listed here too.
   if (me.anymcp) api("anymcp").then(({ agents }) => {
+    amStale = agents.some((a) => a.app === "Agent Keyboard" && a.stale);
+    amSync();
     document.getElementById("amslot").innerHTML = agents.filter((a) => a.app !== "Agent Keyboard").map((a) => `<p class="small acct">anymcp: ${esc(a.app)} on${a.stale ? " (still on your previous Claude: switch it from its bar)" : ""}<span><a href="#" class="amoff" data-sprite="${esc(a.sprite)}" data-app="${esc(a.app)}">Turn off</a></span></p>`).join("");
     document.querySelectorAll(".amoff").forEach((x) => x.addEventListener("click", (e) => {
       e.preventDefault();
@@ -353,7 +355,14 @@ function listen(url) {
 <script>
 // Spec 32: anymcp.chat's agent, to manage these sites by chatting. Its bar knows the user from a short JWT of this
 // session; Turn on gives it an MCP token for /mcp, revoked once the agent is off.
-let amJwt, amOn = null, amStarting = false;
+let amJwt, amOn = null, amStarting = false, amStale = false, amSwitched = false;
+// After a Claude switch here (Reconnect Claude, or our Claude), the chat agent follows: we are its setup provider,
+// so a fresh in-page handoff moves it to the new Claude. Once per page load, so a failure can't loop.
+function amSync() {
+  if (!amStale || !amOn || amStarting || amSwitched) return;
+  amSwitched = true;
+  amEnable().catch((err) => { amStarting = false; alert(err.message); });
+}
 window.anymcp = Object.assign(window.anymcp || {}, { token: async () => {
   if (!amJwt || amJwt.exp < Date.now() + 60e3) { const r = await fetch("/cloud/anymcp/jwt"); amJwt = r.ok ? { t: (await r.json()).token, exp: Date.now() + 600e3 } : null; }
   return amJwt?.t ?? null;
@@ -383,7 +392,7 @@ addEventListener("anymcp:status", (e) => {
   const { on, setup } = e.detail;
   if (on || setup) amStarting = false;
   else if (!amStarting && amOn !== false) api("anymcp/token/revoke", {}).catch(() => {}); // once per turn-off, not every check
-  if (amOn !== on) { amOn = on; amRow(); }
+  if (amOn !== on) { amOn = on; amRow(); amSync(); }
 });
 addEventListener("anymcp:changed", () => render());
 </script>
