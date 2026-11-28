@@ -165,7 +165,7 @@ async function render(note) {
   // The card's title is the site's address: the custom domain once active, else Pages, else the repo's own domain.
   const host = (i) => (i.pages?.state === "live" ? (i.customDomain?.status === "active" ? i.customDomain.host : i.pages.live) : i.starter ? i.url : i.domain).replace("https://", "");
   $app.innerHTML = (note ? `<p class="note">${esc(note)}</p>` : "") + (me.cloudflare ? "" : cfForm(me)) + list.map((i) => {
-    const behind = latest ? i.version !== latest : null, bad = !["running", "warm", "cold"].includes(i.status);
+    const behind = latest ? i.version !== latest : null, bad = !["running", "warm", "cold", "checking"].includes(i.status);
     return `
     <div class="card inst" data-id="${esc(i.id)}" data-adv="${esc(`${i.id}@${i.createdAt}`)}">
       <div class="head"><h2>${bad ? `<span class="dot bad" title="${esc(i.status)}"></span>` : ""}<a href="/cloud/open/${esc(i.id)}" target="_blank" rel="noopener" title="Opens signed in to the bar">${esc(host(i))}</a>${i.pages?.state === "live" && i.customDomain?.status === "active" ? ` ${unlink(i.customDomain.host)}` : ""}</h2></div>

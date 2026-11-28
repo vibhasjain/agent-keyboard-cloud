@@ -896,12 +896,17 @@ async function barAccount(email) {
   if (!r.ok && r.status !== 422) throw new Error(`supabase: ${r.status} ${(await r.text()).slice(0, 200)}`);
 }
 
+const lastStatus = new Map(); // Sprite id -> its last status from Fly
 async function status(inst) {
   const c = inst.customDomain?.status === "pending" && Date.now() - (inst.customDomain.checkedAt ?? 0) > 30e3 && cfs.get(inst.email);
   if (c) { await checkDomain(inst.id, c); inst = load().find((x) => x.id === inst.id) ?? inst; }
   try {
-    const s = await sprites(await mint(open(inst.assertion))).get(inst.id);
-    return { ...pub(inst), status: s.status ?? "unknown" };
+    // Fly's Sprites API sometimes takes 10 s+: don't hold the dashboard for it. Past 2.5 s show the last status seen
+    // (or "checking"); the lookup still finishes and is remembered for the next load.
+    const get = mint(open(inst.assertion)).then((m) => sprites(m).get(inst.id)).then((s) => (lastStatus.set(inst.id, s.status ?? "unknown"), s.status ?? "unknown"));
+    get.catch(() => {});
+    const st = await Promise.race([get, new Promise((r) => setTimeout(r, 2500, null))]);
+    return { ...pub(inst), status: st ?? lastStatus.get(inst.id) ?? "checking" };
   } catch (e) {
     return { ...pub(inst), status: e.status === 401 || e.status === 400 ? "reconnect Fly" : "unknown" };
   }
