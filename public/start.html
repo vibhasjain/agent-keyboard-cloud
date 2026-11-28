@@ -25,7 +25,7 @@
   <h1>Add a site</h1>
   <p>Your own Agent Keyboard on a Fly.io Sprite, in five steps with no terminal. Everything runs in <b>your</b> Fly and Cloudflare accounts with <b>your</b> Claude subscription. We only set it up.</p>
   <div id="app" class="card" aria-live="polite"><p>Loading…</p></div>
-  <p class="small" id="claude">Prefer Claude? <a href="https://claude.ai/customize/connectors?modal=add-custom-connector&amp;connectorName=Agent%20Keyboard&amp;connectorUrl=https%3A%2F%2Fagentkeyboard.com%2Fmcp" target="_blank" rel="noopener">Connect to Claude</a> and it walks you through the same steps.</p>
+  <p class="small">Prefer your own agent? Add our MCP server, <code>https://agentkeyboard.com/mcp</code>, to Claude, ChatGPT or any agent that supports MCP, and it can set up and manage your sites for you.</p>
   <p class="small">What we keep: your GitHub email and login, your GitHub sign-in token (encrypted, so you stay signed in), the repo you pick, and an encrypted Fly credential that lets the dashboard restart, update or delete your Sprite. You can revoke it any time in your Fly dashboard under Tokens ("Agent (auth.md)"). Your Cloudflare token goes into your repo's GitHub Actions secrets (and is kept encrypted here to set up your other sites); disconnect it on the dashboard, or revoke it any time on Cloudflare's token page. Your Claude token goes into a connector in your Fly account and never reaches us. A light instance costs about $1/month on Fly, which Fly's Free plan covers: it includes $5 of usage a month once you add a card. New Fly accounts get a $1 trial credit for 7 days, no card needed.</p>
 </div>
 <script>
@@ -58,8 +58,6 @@ async function render() {
       api("account/delete", {}).then((r) => { if (r.warning) alert(r.warning); location.reload(); }, (e) => alert(e.message));
     });
   }
-  // Already connected to Claude: point there instead of offering the connector again.
-  if (me.claude) document.getElementById("claude").innerHTML = `Connected to Claude. <a href="https://claude.ai/new?q=${encodeURIComponent("Set up Agent Keyboard on my site")}" target="_blank" rel="noopener">Ask Claude</a> to walk you through these steps instead.`;
   if (!me.signedIn || !me.github) {
     if (me.app !== false) return location.replace("/signin?next=start");
     $app.innerHTML = `<p class="err">Sign-up isn't open yet.</p>`;
