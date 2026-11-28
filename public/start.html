@@ -186,6 +186,10 @@ render();
 // The account menu closes on a tap outside it or Escape.
 addEventListener("click", (e) => document.querySelectorAll(".acct-menu[open]").forEach((d) => !d.contains(e.target) && d.removeAttribute("open")));
 addEventListener("keydown", (e) => e.key === "Escape" && document.querySelectorAll(".acct-menu[open]").forEach((d) => d.removeAttribute("open")));
+if (matchMedia("(hover: hover)").matches) { // mouse: open on hover; touch keeps tap-to-open
+  addEventListener("mouseover", (e) => document.querySelectorAll(".acct-menu").forEach((d) => (d.open = d.contains(e.target))));
+  addEventListener("click", (e) => e.detail && e.target.closest(".acct-menu summary") && e.preventDefault());
+}
 </script>
 <script src="https://agent-keyboard.fly.dev/widget.js" data-site="halo" data-accent="#ffb86b" data-theme="dark" data-summon="signed-out" defer></script>
 </body>
