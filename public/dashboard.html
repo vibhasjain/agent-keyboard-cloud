@@ -356,7 +356,9 @@ let amJwt, amOn = null, amStarting = false;
 window.anymcp = { token: async () => {
   if (!amJwt || amJwt.exp < Date.now() + 60e3) { const r = await fetch("/cloud/anymcp/jwt"); amJwt = r.ok ? { t: (await r.json()).token, exp: Date.now() + 600e3 } : null; }
   return amJwt?.t ?? null;
-} };
+},
+// We are the setup provider, so the bar can hand us the code here instead of opening our /anymcp page in a tab.
+setup: (x) => api("anymcp/enable", { code: x?.code ?? x }) };
 function amRow() {
   const el = document.getElementById("chatslot");
   if (!el || amOn === null) return;

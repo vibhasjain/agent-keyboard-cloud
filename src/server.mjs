@@ -203,12 +203,15 @@ const anymcpStale = (email, a) => (a.aiKey ? claudeOf(email) !== "ak" : a.connec
 // The code arrives in the fragment (never in logs or a Referer) and is kept across sign-in in sessionStorage.
 const anymcpPage = (s) => {
   const conn = s && claudeOf(s.email), ready = s && flyOf(s.email) && conn && (conn !== "ak" || PAID);
-  const claude = conn === "ak" ? `your Agent Keyboard credit ($${Math.max(0, (accts.get(s.email)?.credit ?? 0) / 1e6).toFixed(2)} left), at the same rates and $${DAILY / 1e6}/day limit as your sites` : "your Claude subscription (the same connection your sites use)";
-  return page("Turn on anymcp", `<h2>Turn on anymcp for <span class="app">this app</span></h2>
-${!s ? "<p>Signing you in…</p>" : !ready ? `<p>Connect Fly and Claude on Agent Keyboard first, then start again from <span class="app">the app</span>. <a href="/dashboard">Open the dashboard</a></p>` : `<p>anymcp sets up <span class="app">the app</span>'s agent with your Agent Keyboard setup, so you don't sign in to Fly or Claude again. It gets:</p>
-<ul><li><b>Your Fly account:</b> it creates the agent there as a Sprite named <code>ak-anymcp-…</code>, and can restart, update and delete it.</li><li><b>Claude:</b> ${claude}.</li></ul>
-<p class="small">Turn it off from <span class="app">the app</span>'s bar or your dashboard. That deletes only the agent's Sprite.</p>
-<div class="row"><button class="btn" id="on">Turn on</button></div>`}<p id="msg" role="alert"></p>
+  const claude = conn === "ak" ? `Uses your Agent Keyboard credit ($${Math.max(0, (accts.get(s.email)?.credit ?? 0) / 1e6).toFixed(2)} left, $${DAILY / 1e6}/day limit), like your sites.` : "Uses your Claude subscription, the same connection as your sites.";
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer"><title>Set up the chat agent</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet"><link rel="stylesheet" href="/cloud/cloud.css"></head>
+<body><div class="wrap"><div class="top"><a class="brand" href="/dashboard"><img src="https://agentkeyboard.com/typewriter-mark.png" alt=""><b>Agent Keyboard</b></a></div>
+<h1>Set up <span class="app">this app</span>'s chat agent</h1>
+${!s ? "<p>Signing you in…</p>" : !ready ? `<div class="card"><p>Connect Fly and Claude on Agent Keyboard first, then start again from <span class="app">the app</span>.</p><div class="row"><a class="btn" href="/dashboard">Open the dashboard</a></div></div>` : `<p>It uses what you already connected here, so you don't sign in to Fly or Claude again.</p>
+<div class="card" id="ask"><div class="meta"><b>Fly.io</b></div><p>Runs on its own Sprite (<code>ak-anymcp-…</code>) in your Fly account.</p><div class="meta"><b>Claude</b></div><p>${claude}</p>
+<p class="small">Turn it off any time from the chat bar or your dashboard. That deletes only its Sprite.</p>
+<div class="row"><button class="btn" id="on">Continue</button><button class="btn ghost" id="no" type="button">Cancel</button></div></div>`}<p id="msg" role="alert"></p></div>
 <script>
 const KEY = "ak-anymcp", h = new URLSearchParams(location.hash.slice(1)).get("code") ? location.hash.slice(1) : sessionStorage.getItem(KEY) ?? "";
 const p = new URLSearchParams(h), code = p.get("code") ?? "", app = (p.get("app") || "").slice(0, 80);
@@ -219,15 +222,18 @@ if (!/^[\\w-]{16,128}$/.test(code)) { on?.remove(); m.className = "err"; m.textC
 else if (${!s}) { sessionStorage.setItem(KEY, h); location.replace("/signin?next=" + encodeURIComponent("/anymcp")); }
 else if (on) {
   sessionStorage.removeItem(KEY);
+  // The bar opened this tab, so it may close itself; if the browser won't, say so.
+  const done = (now, after) => { document.getElementById("ask").hidden = true; m.className = ""; m.textContent = now; setTimeout(() => { window.close(); m.textContent = after; }, 1200); };
+  document.getElementById("no").onclick = () => done("Cancelled.", "Cancelled. You can close this tab.");
   on.onclick = async () => {
     on.disabled = true; m.className = ""; m.textContent = "Turning on…";
     const r = await fetch("/cloud/anymcp/enable", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
     const d = await r.json().catch(() => ({}));
-    if (r.ok) { on.remove(); m.textContent = "On. Go back to " + (app || "the app") + ": its bar shows the agent."; }
+    if (r.ok) { done("Done. Taking you back to " + (app || "the app") + "…", "Done. You can close this tab: " + (app || "the app") + "'s bar is setting up the agent."); }
     else { on.disabled = false; on.textContent = "Try again"; m.className = "err"; m.textContent = d.error || "Something went wrong (" + r.status + ")"; }
   };
 }
-</script>`).replace("<head>", '<head><meta name="referrer" content="no-referrer">');
+</script></body></html>`;
 };
 // Stripe's checkout.session.completed adds the credit, once per session.
 async function stripeWebhook(req, res) {
