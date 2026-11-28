@@ -186,6 +186,19 @@ async function stripeWebhook(req, res) {
   send(res, 200, { received: true });
 }
 const LOGIN = "ak-claude-signin"; // a short-lived Sprite the Claude sign-in runs on, deleted after
+const loginTimers = new Map(); // email → timer that deletes LOGIN if the sign-in is abandoned
+// Start a Claude sign-in on LOGIN (created if missing); it's deleted 30 min later unless finished first.
+async function startLogin(email, assertion, api) {
+  if (!(await api.get(LOGIN).catch((e) => (e.status === 404 ? null : Promise.reject(e))))) await api.create(LOGIN);
+  clearTimeout(loginTimers.get(email));
+  loginTimers.set(email, setTimeout(() => dropLogin(email, assertion), 30 * 60_000).unref());
+  return claudeLoginStart(api, LOGIN);
+}
+function dropLogin(email, assertion) {
+  clearTimeout(loginTimers.get(email));
+  loginTimers.delete(email);
+  mint(assertion).then((c) => sprites(c).remove(LOGIN)).catch((e) => (e.status === 404 ? null : console.error("remove", LOGIN, e.message)));
+}
 
 // The start flow: Fly (once), Claude (once), then the site if one was picked; with none it ends at "ready".
 async function runFly(flow) {
@@ -209,8 +222,7 @@ async function runFly(flow) {
       return await runSite(flow);
     }
     step(flow, "claude", { detail: "starting Claude sign-in" });
-    if (!(await api.get(LOGIN).catch((e) => (e.status === 404 ? null : Promise.reject(e))))) await api.create(LOGIN);
-    flow.loginUrl = await claudeLoginStart(api, LOGIN);
+    flow.loginUrl = await startLogin(flow.email, flow.assertion, api);
     step(flow, "claude"); // the code the user pastes continues in runClaude
   } catch (e) {
     step(flow, "error", { error: e.message });
@@ -226,12 +238,11 @@ async function claudeSwitch(email, code) {
   try {
     const creds = await mint(flyOf(email)), api = sprites(creds);
     if (!code) {
-      if (!(await api.get(LOGIN).catch((e) => (e.status === 404 ? null : Promise.reject(e))))) await api.create(LOGIN);
-      return Object.assign(st, { step: "code", url: await claudeLoginStart(api, LOGIN) });
+      return Object.assign(st, { step: "code", url: await startLogin(email, flyOf(email), api) });
     }
     const conn = await claudeLoginFinish(api, LOGIN, code, creds);
     await api.setPolicy(conn, "ak-");
-    api.remove(LOGIN).catch((e) => console.error("remove", LOGIN, e.message));
+    dropLogin(email, flyOf(email));
     const old = claudeOf(email), failed = [];
     for (const i of load().filter((i) => i.email === email)) {
       try {
@@ -249,6 +260,7 @@ async function claudeSwitch(email, code) {
     Object.assign(st, { step: "done", failed });
   } catch (e) {
     Object.assign(st, { step: "error", error: e.message });
+    if (code) dropLogin(email, flyOf(email)); // the sign-in is spent; Reconnect starts a fresh one
   }
 }
 
@@ -277,14 +289,14 @@ async function runClaude(flow, code) {
     await api.setPolicy(connection, "ak-"); // every one of the user's Sprites
     setAcct(flow.email, { claude: connection });
     flow.loginUrl = null;
-    api.remove(LOGIN).catch((e) => console.error("remove", LOGIN, e.message));
+    dropLogin(flow.email, flow.assertion);
     await runSite(flow);
   } catch (e) {
     // Claude's login is single-use: drop the old link (the page waits) and start a fresh one.
     if (flow.step === "connector") flow.loginUrl = null;
     step(flow, flow.step === "connector" ? "claude" : "error", { error: e.message });
     if (flow.step === "claude") {
-      mint(flow.assertion).then((c) => claudeLoginStart(sprites(c), LOGIN)).then((u) => (flow.loginUrl = u), (e2) => step(flow, "error", { error: e2.message }));
+      mint(flow.assertion).then((c) => startLogin(flow.email, flow.assertion, sprites(c))).then((u) => (flow.loginUrl = u), (e2) => step(flow, "error", { error: e2.message }));
     }
   }
 }
@@ -994,7 +1006,7 @@ const routes = {
     if (f?.step === "claude") {
       useOurs(s.email);
       f.loginUrl = null;
-      mint(f.assertion).then((c) => sprites(c).remove(LOGIN)).catch(() => {});
+      dropLogin(s.email, f.assertion);
       runSite(f).catch((e) => step(f, "error", { error: e.message }));
       return send(res, 200, flowView(f));
     }
