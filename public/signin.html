@@ -27,7 +27,7 @@
 </div>
 <script>
 // ?next=start comes from /start: GitHub then walks a new user through installing the app.
-const n = new URLSearchParams(location.search).get("next") ?? "", next = n === "start" || n.startsWith("/anymcp?") ? n : "dashboard";
+const n = new URLSearchParams(location.search).get("next") ?? "", next = n === "start" || n === "/anymcp" ? n : "dashboard";
 document.getElementById("go").href = "/cloud/github/login?next=" + encodeURIComponent(next);
 if (next === "start") document.getElementById("go").insertAdjacentHTML("beforebegin", '<p class="small">GitHub then asks where to install Agent Keyboard. If your site\'s repo is in an organization, pick that organization. You can add more accounts later.</p>');
 </script>

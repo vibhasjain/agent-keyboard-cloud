@@ -184,7 +184,7 @@ async function render(note) {
       : me.claudeAccount ? `<p class="small acct">Claude: connected<span><a href="#" id="clre">Reconnect Claude</a>${me.billing ? ` · <a href="#" id="clours" title="Pay as you go on our Claude: no subscription needed">Use Agent Keyboard's Claude</a>` : ""}</span></p>` : ""}<div id="amslot"></div><div id="cfslot"></div>`;
   // Spec 31: anymcp agents turned on with this setup.
   if (me.anymcp) api("anymcp").then(({ agents }) => {
-    document.getElementById("amslot").innerHTML = agents.map((a) => `<p class="small acct">anymcp: ${esc(a.app)} on<span><a href="#" class="amoff" data-sprite="${esc(a.sprite)}" data-app="${esc(a.app)}">Turn off</a></span></p>`).join("");
+    document.getElementById("amslot").innerHTML = agents.map((a) => `<p class="small acct">anymcp: ${esc(a.app)} on${a.stale ? " (still on your previous Claude: switch it from its bar)" : ""}<span><a href="#" class="amoff" data-sprite="${esc(a.sprite)}" data-app="${esc(a.app)}">Turn off</a></span></p>`).join("");
     document.querySelectorAll(".amoff").forEach((x) => x.addEventListener("click", (e) => {
       e.preventDefault();
       if (confirm(`Turn off anymcp for ${x.dataset.app}? This deletes its Sprite from your Fly account.`)) api("anymcp/off", { sprite: x.dataset.sprite }).then(() => render(), (err) => render(err.message));

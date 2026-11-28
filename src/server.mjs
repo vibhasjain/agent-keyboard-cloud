@@ -165,61 +165,70 @@ async function anthropicProxy(req, res, u) {
   if (req.method !== "POST" || !/^\/v1\/messages(\/count_tokens)?(\?|$)/.test(path)) return send(res, 404, apiErr("not_found_error", "not found"));
   const tok = String(req.headers.authorization ?? "").replace(/^Bearer\s+/i, "") || String(req.headers["x-api-key"] ?? "");
   const k = PAID && tok && sha(tok); // a site's token, or an anymcp agent's (spec 31)
-  const email = k && (load().find((i) => i.aiKey === k)?.email ?? [...accts].find(([, a]) => a.anymcp?.some((x) => x.aiKey === k))?.[0]), a = email && accts.get(email);
-  if (!a || a.claude !== "ak") return send(res, 401, apiErr("authentication_error", `This site isn't on Agent Keyboard's Claude. Reconnect Claude at ${BASE}/dashboard`));
+  const site = k && load().find((i) => i.aiKey === k), agent = k && !site && [...accts].find(([, a]) => a.anymcp?.some((x) => x.aiKey === k));
+  const email = site?.email ?? agent?.[0], a = email && accts.get(email); // an anymcp agent's token outlives a switch away from ours
+  if (!a || (site && a.claude !== "ak")) return send(res, 401, apiErr("authentication_error", `This site isn't on Agent Keyboard's Claude. Reconnect Claude at ${BASE}/dashboard`));
   if ((a.credit ?? 0) < MIN) return send(res, 402, apiErr("billing_error", `Out of Agent Keyboard credit ($${Math.max(0, (a.credit ?? 0) / 1e6).toFixed(2)} left). Top up at ${BASE}/dashboard`));
   if (a.day?.d === new Date().toISOString().slice(0, 10) && a.day.spent >= DAILY) return send(res, 402, apiErr("billing_error", `Today's $${DAILY / 1e6} limit on Agent Keyboard's Claude is used up. It resets at midnight UTC, or switch to your own Claude at ${BASE}/dashboard`));
   const c = await forward(req, res, path, env.ANTHROPIC_API_KEY);
   if (c) charge(email, c);
 }
 
-// ---- spec 31: turn on anymcp with the user's Fly + Claude. Server to server, signed like our webhooks (spec 21).
-// anymcp names these Sprites ak-anymcp-*, so the shared connection's ak- policy covers them; they aren't our instances. ----
+// ---- spec 31: turn on anymcp with the user's Fly + Claude. anymcp's bar makes a one-time code (one app user, 10 min,
+// single use) and sends the user here with it in the URL fragment; holding it is the permission, so the call isn't signed.
+// anymcp names these Sprites ak-anymcp-*, so the shared connection's ak- policy covers them; they aren't our instances.
+// No resends: a Claude switch here keeps an agent's old access working until a fresh code from anymcp's bar replaces it. ----
 const ANYMCP = (env.ANYMCP_URL ?? "https://anymcp.chat").replace(/\/$/, "");
-const anymcpOf = (email) => accts.get(email)?.anymcp ?? []; // [{ sprite, app, at, aiKey? }]
-// ref: { code } from anymcp's bar to install, or { sprite } to resend after a Claude switch.
-async function anymcpHandoff(email, ref) {
+const anymcpOf = (email) => accts.get(email)?.anymcp ?? []; // [{ sprite, app, at, connection? | aiKey? }]
+async function anymcpHandoff(email, code) {
   const conn = claudeOf(email), token = conn === "ak" ? aiToken() : null;
-  const raw = JSON.stringify({ ...ref, identity_assertion: flyOf(email), ...(token ? { claude: { base_url: PROXY, token, model: "sonnet" } } : { connection_id: conn }) });
-  const t = Math.floor(Date.now() / 1000), sig = createHmac("sha256", env.ANYMCP_HANDOFF_SECRET).update(`${t}.${raw}`).digest("hex");
-  const r = await fetch(`${ANYMCP}/api/handoff`, { method: "POST", headers: { "Content-Type": "application/json", "X-Signature": `t=${t},v1=${sig}` }, body: raw, signal: AbortSignal.timeout(60e3) });
+  const r = await fetch(`${ANYMCP}/api/handoff`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(60e3),
+    body: JSON.stringify({ code, identity_assertion: flyOf(email), ...(token ? { claude: { base_url: PROXY, token, model: "sonnet" } } : { connection_id: conn }) }),
+  });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(typeof d.error === "string" ? d.error.slice(0, 300) : `anymcp.chat answered ${r.status}`);
-  if (!/^ak-anymcp-[a-z0-9-]{1,60}$/.test(d.sprite ?? "") || (ref.sprite && d.sprite !== ref.sprite)) throw new Error("anymcp.chat sent back an unexpected agent name");
-  return { sprite: d.sprite, app: String(d.app || d.sprite).slice(0, 80), aiKey: token ? sha(token) : undefined };
+  if (!/^ak-anymcp-[a-z0-9-]{1,60}$/.test(d.sprite ?? "")) throw new Error("anymcp.chat sent back an unexpected agent name");
+  return { sprite: d.sprite, app: String(d.app || d.sprite).slice(0, 80), ...(token ? { aiKey: sha(token) } : { connection: conn }) };
 }
-const putAnymcp = (email, a) => setAcct(email, { anymcp: [...anymcpOf(email).filter((x) => x.sprite !== a.sprite), a] });
-const dropAnymcp = (email, gone) => setAcct(email, { anymcp: anymcpOf(email).filter((x) => !gone.includes(x.sprite)) }); // its aiKey goes with it
-// After a Claude switch: each anymcp agent gets the new Claude (a new token on ours; none on BYOC, which retires the old one).
-async function anymcpResync(email, failed) {
-  for (const a of anymcpOf(email)) {
-    try { putAnymcp(email, { ...a, aiKey: (await anymcpHandoff(email, { sprite: a.sprite })).aiKey }); }
-    catch (e) { console.error("anymcp resync", a.sprite, e.message); failed.push(a.sprite); }
-  }
+// A Claude connection kept only for anymcp agents (after a Reconnect) goes once none of them, and no site, uses it.
+function retire(email, before) {
+  const used = new Set([claudeOf(email), ...anymcpOf(email).map((a) => a.connection), ...load().filter((i) => i.email === email).map((i) => i.connection)]);
+  const drop = [...new Set(before.map((a) => a.connection))].filter((c) => c && c !== "ak" && !used.has(c));
+  if (drop.length) mint(flyOf(email)).then((c) => Promise.all(drop.map((id) => sprites(c).removeConnection(id).catch((e) => (e.status === 404 ? null : Promise.reject(e)))))).catch((e) => console.error("retire connector", e.message));
 }
-function anymcpPage(s, q) {
-  const app = escH(String(q.get("app") || "this app").slice(0, 80)), code = q.get("code") ?? "", conn = s && claudeOf(s.email);
-  const msg = (t) => page("Turn on anymcp", `<h2>Turn on anymcp</h2><p>${t}</p>`);
-  if (!env.ANYMCP_HANDOFF_SECRET) return msg("This isn't available yet.");
-  if (!/^[\w-]{16,128}$/.test(code)) return msg(`This link is broken or incomplete. Start again from ${app}.`);
-  if (!flyOf(s.email) || !conn || (conn === "ak" && !PAID)) return msg(`Connect Fly and Claude on Agent Keyboard first, then start again from ${app}. <a href="/dashboard">Open the dashboard</a>`);
+const setAnymcp = (email, list) => { const before = anymcpOf(email); setAcct(email, { anymcp: list }); retire(email, before); }; // a dropped aiKey stops working at once
+// Its Claude no longer matches the account's choice: the user switches it from anymcp's bar.
+const anymcpStale = (email, a) => (a.aiKey ? claudeOf(email) !== "ak" : a.connection !== claudeOf(email));
+// The code arrives in the fragment (never in logs or a Referer) and is kept across sign-in in sessionStorage.
+const anymcpPage = (s) => {
+  const conn = s && claudeOf(s.email), ready = s && flyOf(s.email) && conn && (conn !== "ak" || PAID);
   const claude = conn === "ak" ? `your Agent Keyboard credit ($${Math.max(0, (accts.get(s.email)?.credit ?? 0) / 1e6).toFixed(2)} left), at the same rates and $${DAILY / 1e6}/day limit as your sites` : "your Claude subscription (the same connection your sites use)";
-  return page("Turn on anymcp", `<h2>Turn on anymcp for ${app}</h2>
-<p>anymcp sets up ${app}'s agent with your Agent Keyboard setup, so you don't sign in to Fly or Claude again. It gets:</p>
+  return page("Turn on anymcp", `<h2>Turn on anymcp for <span class="app">this app</span></h2>
+${!s ? "<p>Signing you in…</p>" : !ready ? `<p>Connect Fly and Claude on Agent Keyboard first, then start again from <span class="app">the app</span>. <a href="/dashboard">Open the dashboard</a></p>` : `<p>anymcp sets up <span class="app">the app</span>'s agent with your Agent Keyboard setup, so you don't sign in to Fly or Claude again. It gets:</p>
 <ul><li><b>Your Fly account:</b> it creates the agent there as a Sprite named <code>ak-anymcp-…</code>, and can restart, update and delete it.</li><li><b>Claude:</b> ${claude}.</li></ul>
-<p class="small">Turn it off from ${app}'s bar or your dashboard. That deletes only the agent's Sprite.</p>
-<div class="row"><button class="btn" id="on">Turn on</button></div><p id="msg" role="alert"></p>
+<p class="small">Turn it off from <span class="app">the app</span>'s bar or your dashboard. That deletes only the agent's Sprite.</p>
+<div class="row"><button class="btn" id="on">Turn on</button></div>`}<p id="msg" role="alert"></p>
 <script>
-document.getElementById("on").onclick = async (e) => {
-  const b = e.target, m = document.getElementById("msg");
-  b.disabled = true; m.className = ""; m.textContent = "Turning on…";
-  const r = await fetch("/cloud/anymcp/enable", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: ${JSON.stringify(code)} }) });
-  const d = await r.json().catch(() => ({}));
-  if (r.ok) { b.remove(); m.textContent = "On. Go back to " + ${JSON.stringify(String(q.get("app") || "the app").slice(0, 80)).replace(/</g, "\\u003c")} + ": its bar shows the agent."; }
-  else { b.disabled = false; b.textContent = "Try again"; m.className = "err"; m.textContent = d.error || "Something went wrong (" + r.status + ")"; }
-};
-</script>`);
+const KEY = "ak-anymcp", h = new URLSearchParams(location.hash.slice(1)).get("code") ? location.hash.slice(1) : sessionStorage.getItem(KEY) ?? "";
+const p = new URLSearchParams(h), code = p.get("code") ?? "", app = (p.get("app") || "").slice(0, 80);
+history.replaceState(null, "", location.pathname);
+if (app) document.querySelectorAll(".app").forEach((e) => (e.textContent = app));
+const m = document.getElementById("msg"), on = document.getElementById("on");
+if (!/^[\\w-]{16,128}$/.test(code)) { on?.remove(); m.className = "err"; m.textContent = "This link is broken or incomplete. Start again from the app."; }
+else if (${!s}) { sessionStorage.setItem(KEY, h); location.replace("/signin?next=" + encodeURIComponent("/anymcp")); }
+else if (on) {
+  sessionStorage.removeItem(KEY);
+  on.onclick = async () => {
+    on.disabled = true; m.className = ""; m.textContent = "Turning on…";
+    const r = await fetch("/cloud/anymcp/enable", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) { on.remove(); m.textContent = "On. Go back to " + (app || "the app") + ": its bar shows the agent."; }
+    else { on.disabled = false; on.textContent = "Try again"; m.className = "err"; m.textContent = d.error || "Something went wrong (" + r.status + ")"; }
+  };
 }
+</script>`).replace("<head>", '<head><meta name="referrer" content="no-referrer">');
+};
 // Stripe's checkout.session.completed adds the credit, once per session.
 async function stripeWebhook(req, res) {
   let raw = "";
@@ -305,8 +314,7 @@ async function claudeSwitch(email, code) {
       }
     }
     setAcct(email, { claude: conn });
-    await anymcpResync(email, failed);
-    if (old && old !== "ak" && old !== conn && !failed.length) await api.removeConnection(old).catch((e) => (e.status === 404 ? null : console.error("remove connector", e.message)));
+    if (old && old !== "ak" && old !== conn && !failed.length && !anymcpOf(email).some((a) => a.connection === old)) await api.removeConnection(old).catch((e) => (e.status === 404 ? null : console.error("remove connector", e.message)));
     Object.assign(st, { step: "done", failed });
   } catch (e) {
     Object.assign(st, { step: "error", error: e.message });
@@ -328,7 +336,6 @@ async function oursSwitch(email) {
       failed.push(i.id);
     }
   }
-  await anymcpResync(email, failed);
   Object.assign(st, { step: "done", failed });
 }
 
@@ -924,17 +931,16 @@ const routes = {
     send(res, 200, readFileSync(new URL("signin.html", PAGES)), "text/html; charset=utf-8");
   },
   "GET /anymcp": (q, req, res, s) => {
-    if (!s) return redirect(res, `/signin?next=${encodeURIComponent(`/anymcp?${q}`)}`);
-    send(res, 200, anymcpPage(s, q), "text/html; charset=utf-8");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    send(res, 200, anymcpPage(s), "text/html; charset=utf-8");
   },
   "POST /cloud/anymcp/enable": async (q, req, res, s, b) => {
     if (!s) return send(res, 401, { error: "Sign in" });
     const conn = claudeOf(s.email);
-    if (!env.ANYMCP_HANDOFF_SECRET) return send(res, 400, { error: "This isn't available yet" });
     if (!/^[\w-]{16,128}$/.test(String(b.code ?? ""))) return send(res, 400, { error: "This link is broken. Start again from the app." });
     if (!flyOf(s.email) || !conn || (conn === "ak" && !PAID)) return send(res, 400, { error: "Connect Fly and Claude on your dashboard first" });
-    const r = await anymcpHandoff(s.email, { code: b.code });
-    putAnymcp(s.email, { ...r, at: new Date().toISOString() });
+    const r = await anymcpHandoff(s.email, b.code);
+    setAnymcp(s.email, [...anymcpOf(s.email).filter((x) => x.sprite !== r.sprite), { ...r, at: new Date().toISOString() }]); // a new code for the same agent replaces its Claude
     send(res, 200, { sprite: r.sprite, app: r.app });
   },
   // The dashboard's list. A Sprite deleted from anymcp's side (or on Fly) drops off here, and its token stops working.
@@ -942,14 +948,14 @@ const routes = {
     if (!s) return send(res, 401, { error: "Sign in" });
     const list = anymcpOf(s.email), api = list.length && sprites(await mint(flyOf(s.email)));
     const gone = (await Promise.all(list.map((a) => api.get(a.sprite).then(() => null, (e) => (e.status === 404 ? a.sprite : null))))).filter(Boolean);
-    if (gone.length) dropAnymcp(s.email, gone);
-    send(res, 200, { agents: list.filter((a) => !gone.includes(a.sprite)).map(({ sprite, app, at }) => ({ sprite, app, at })) });
+    if (gone.length) setAnymcp(s.email, anymcpOf(s.email).filter((x) => !gone.includes(x.sprite)));
+    send(res, 200, { agents: list.filter((a) => !gone.includes(a.sprite)).map((a) => ({ sprite: a.sprite, app: a.app, at: a.at, stale: anymcpStale(s.email, a) })) });
   },
   "POST /cloud/anymcp/off": async (q, req, res, s, b) => {
     if (!s) return send(res, 401, { error: "Sign in" });
     if (!anymcpOf(s.email).some((a) => a.sprite === b.sprite)) return send(res, 404, { error: "No such anymcp agent" });
     await sprites(await mint(flyOf(s.email))).remove(b.sprite).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
-    dropAnymcp(s.email, [b.sprite]);
+    setAnymcp(s.email, anymcpOf(s.email).filter((x) => x.sprite !== b.sprite));
     send(res, 200, { ok: true });
   },
   "GET /cloud/cloud.css": (q, req, res) => send(res, 200, readFileSync(new URL("cloud.css", PAGES)), "text/css"),
@@ -973,7 +979,7 @@ const routes = {
     if (!appReady()) return send(res, 503, { error: "GitHub App not set up yet" });
     const state = randomBytes(16).toString("hex");
     const n = q.get("next") ?? "";
-    states.set(state, n === "dashboard" || n.startsWith("/oauth/authorize?") || n.startsWith("/anymcp?") ? n : "start");
+    states.set(state, n === "dashboard" || n.startsWith("/oauth/authorize?") || n === "/anymcp" ? n : "start");
     redirect(res, authorizeUrl(state));
   },
   // OAuth callback, and the App's post-install redirect (which also carries a code).
