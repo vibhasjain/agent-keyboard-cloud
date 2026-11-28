@@ -263,6 +263,20 @@ function dropLogin(email, assertion) {
   loginTimers.delete(email);
   mint(assertion).then((c) => sprites(c).remove(LOGIN)).catch((e) => (e.status === 404 ? null : console.error("remove", LOGIN, e.message)));
 }
+// The timers above live in memory, so a deploy drops them: hourly (and after boot) delete any LOGIN older than 30 min
+// in an account with no sign-in pending here.
+async function sweepLogins() {
+  for (const email of new Set([...accts.keys(), ...load().map((i) => i.email)])) {
+    if (loginTimers.has(email) || !flyOf(email)) continue;
+    try {
+      const api = sprites(await mint(flyOf(email)));
+      const s = await api.get(LOGIN).catch((e) => (e.status === 404 ? null : Promise.reject(e)));
+      if (s && Date.now() - Date.parse(s.created_at) > 30 * 60_000) await api.remove(LOGIN).then(() => console.log("swept", LOGIN, email));
+    } catch (e) { console.error("sweep", LOGIN, email, e.message); }
+  }
+}
+setTimeout(sweepLogins, 60e3).unref();
+setInterval(sweepLogins, 3600e3).unref();
 
 // The start flow: Fly (once), Claude (once), then the site if one was picked; with none it ends at "ready".
 async function runFly(flow) {
