@@ -31,6 +31,6 @@ const n = new URLSearchParams(location.search).get("next") ?? "", next = n === "
 document.getElementById("go").href = "/cloud/github/login?next=" + encodeURIComponent(next);
 if (next === "start") document.getElementById("go").insertAdjacentHTML("beforebegin", '<p class="small">GitHub then asks where to install Agent Keyboard. If your site\'s repo is in an organization, pick that organization. You can add more accounts later.</p>');
 </script>
-<script src="https://agent-keyboard.fly.dev/widget.js" data-site="halo" data-accent="#ffb86b" data-theme="dark" data-summon="signed-out" defer></script>
+<script src="https://agent-keyboard.fly.dev/widget.js" data-site="halo" data-accent="rainbow" data-theme="dark" data-summon="signed-out" defer></script>
 </body>
 </html>
